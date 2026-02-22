@@ -95,6 +95,7 @@ import { Worker } from './worker.js';
             // Sync Logic (Restored from beta46)
             window.addEventListener('storage', (e) => {
                 if (e.key === CONFIG.KEYS.BG_STATUS || e.key === CONFIG.KEYS.DB_KEY || e.key === CONFIG.KEYS.BG_QUEUE) {
+                    Storage.invalidate(e.key); // Force cache clear so getJSON fetches fresh data
                     Core.updateControllerUI();
                 }
             });

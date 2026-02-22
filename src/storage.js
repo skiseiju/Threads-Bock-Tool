@@ -17,6 +17,9 @@ export const Storage = {
         delete Storage.cache[key];
         localStorage.removeItem(key);
     },
+    invalidate: (key) => {
+        delete Storage.cache[key];
+    },
     getJSON: (key, defaultVal = []) => {
         if (Storage.cache[key] !== undefined && typeof Storage.cache[key] !== 'string') return Storage.cache[key];
         const val = localStorage.getItem(key);
