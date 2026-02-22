@@ -181,10 +181,22 @@ export const Core = {
     },
 
     updateControllerUI: () => {
-        // Throttled UI update logic
+        // Throttled UI update logic (proper deferral to prevent missed updates)
+        if (Core._uiUpdatePending) return;
+
         const now = Date.now();
-        if (Core._lastUIUpdate && now - Core._lastUIUpdate < 500) return;
+        const timeSinceLast = now - (Core._lastUIUpdate || 0);
+
+        if (timeSinceLast < 500) {
+            Core._uiUpdatePending = setTimeout(() => {
+                Core._uiUpdatePending = null;
+                Core.updateControllerUI();
+            }, 500 - timeSinceLast);
+            return;
+        }
+
         Core._lastUIUpdate = now;
+        Core._uiUpdatePending = null;
 
         const db = new Set(Storage.getJSON(CONFIG.KEYS.DB_KEY));
 
@@ -223,8 +235,7 @@ export const Core = {
             }
         }
 
-        const badge = document.getElementById('hege-queue-badge');
-        if (badge) badge.textContent = Core.pendingUsers.size > 0 ? `(${Core.pendingUsers.size})` : '';
+        let badgeText = Core.pendingUsers.size > 0 ? `(${Core.pendingUsers.size})` : '';
 
         let shouldShowStop = false;
         let mainText = '開始封鎖';
@@ -235,7 +246,11 @@ export const Core = {
             shouldShowStop = true;
             mainText = `背景執行中 ${bgStatus.progress}/${bgStatus.total}`;
             headerColor = '#4cd964';
+            badgeText = `(${bgStatus.progress}/${bgStatus.total})`; // Show progress in header badge explicitly
         }
+
+        const badge = document.getElementById('hege-queue-badge');
+        if (badge) badge.textContent = badgeText;
 
         const stopBtn = document.getElementById('hege-stop-btn-item'); if (stopBtn) stopBtn.style.display = shouldShowStop ? 'flex' : 'none';
         const mainItem = document.getElementById('hege-main-btn-item');
