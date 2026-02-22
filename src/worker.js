@@ -243,11 +243,17 @@ export const Worker = {
             }
 
             if (!confirmBtn) {
-                // Check dialog buttons fallback
+                // Check dialog buttons fallback safely
                 const dialog = document.querySelector('div[role="dialog"]');
                 if (dialog) {
                     const dialogBtns = dialog.querySelectorAll('div[role="button"]');
-                    if (dialogBtns.length > 0) confirmBtn = dialogBtns[dialogBtns.length - 1];
+                    for (let j = dialogBtns.length - 1; j >= 0; j--) {
+                        const style = window.getComputedStyle(dialogBtns[j]);
+                        if (style.color === 'rgb(255, 59, 48)' || dialogBtns[j].innerText.includes('封鎖') || dialogBtns[j].innerText.includes('Block')) {
+                            confirmBtn = dialogBtns[j];
+                            break;
+                        }
+                    }
                 }
             }
 

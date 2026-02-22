@@ -200,6 +200,16 @@ export const Core = {
 
         const db = new Set(Storage.getJSON(CONFIG.KEYS.DB_KEY));
 
+        // Global cleanup
+        let pendingChanged = false;
+        for (const u of Core.pendingUsers) {
+            if (db.has(u)) {
+                Core.pendingUsers.delete(u);
+                pendingChanged = true;
+            }
+        }
+        if (pendingChanged) Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
+
         // Only update visible elements or those that need state change
         document.querySelectorAll('.hege-checkbox-container').forEach(el => {
             const u = el.dataset.username;
@@ -207,10 +217,6 @@ export const Core = {
                 if (!el.classList.contains('finished')) {
                     el.classList.add('finished');
                     el.classList.remove('checked');
-                    if (Core.pendingUsers.has(u)) {
-                        Core.pendingUsers.delete(u);
-                        Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
-                    }
                 }
             } else if (u && !db.has(u) && el.classList.contains('finished')) {
                 el.classList.remove('finished');
@@ -244,9 +250,9 @@ export const Core = {
         const bgStatus = Storage.getJSON(CONFIG.KEYS.BG_STATUS, {});
         if (bgStatus.state === 'running' && (Date.now() - (bgStatus.lastUpdate || 0) < 10000)) {
             shouldShowStop = true;
-            mainText = `背景執行中 ${bgStatus.progress}/${bgStatus.total}`;
+            mainText = `背景執行中 剩餘 ${bgStatus.total}`;
             headerColor = '#4cd964';
-            badgeText = `(${bgStatus.progress}/${bgStatus.total})`; // Show progress in header badge explicitly
+            badgeText = `(${bgStatus.total}剩餘)`; // Show progress in header badge explicitly
         }
 
         const badge = document.getElementById('hege-queue-badge');
