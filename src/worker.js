@@ -151,11 +151,9 @@ export const Worker = {
 
             // 1. Wait for "More" button (Polling up to 12s)
             let profileBtn = null;
-            // Target the profile header area if possible to reduce search space
-            const profileHeader = document.querySelector('header') || document.body;
 
             for (let i = 0; i < 25; i++) {
-                const moreSvgs = profileHeader.querySelectorAll('svg[aria-label="更多"], svg[aria-label="More"]');
+                const moreSvgs = document.querySelectorAll('svg[aria-label="更多"], svg[aria-label="More"]');
                 for (let svg of moreSvgs) {
                     // Check structure to distinguish from other "More" icons
                     if (svg.querySelector('circle') && svg.querySelectorAll('path').length >= 3) {

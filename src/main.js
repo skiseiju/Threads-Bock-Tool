@@ -99,7 +99,12 @@ import { Worker } from './worker.js';
                     Core.updateControllerUI();
                 }
             });
-            setInterval(Core.updateControllerUI, 2000); // Polling backup
+            setInterval(() => {
+                Storage.invalidate(CONFIG.KEYS.DB_KEY);
+                Storage.invalidate(CONFIG.KEYS.BG_STATUS);
+                Storage.invalidate(CONFIG.KEYS.BG_QUEUE);
+                Core.updateControllerUI();
+            }, 2000); // Polling backup
 
             // Env Log
             const isIPad = navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
