@@ -1,9 +1,9 @@
 (function() {
     'use strict';
-    console.log('[HegeBlock] Content Script Injected, Version: 2.0.1');
+    console.log('[HegeBlock] Content Script Injected, Version: 2.0.5');
 // --- config.js ---
 const CONFIG = {
-    VERSION: '2.0.1', // Refactor Version
+    VERSION: '2.0.5', // Performance Optimization Version
     DEBUG_MODE: true,
     DB_KEY: 'hege_block_db_v1',
     KEYS: {
@@ -113,43 +113,68 @@ const Utils = {
 };
 
 // --- storage.js ---
-
-
-// Simple Adapter for LocalStorage (UserScript)
-// Can be extended for Chrome Storage later
+// Simple Adapter for LocalStorage / SessionStorage with Memory Cache
 const Storage = {
+    cache: {},
+    sessionCache: {},
+
     get: (key, defaultVal = null) => {
+        if (Storage.cache[key] !== undefined) return Storage.cache[key];
         const val = localStorage.getItem(key);
-        return val ? val : defaultVal;
+        Storage.cache[key] = val !== null ? val : defaultVal;
+        return Storage.cache[key];
     },
     set: (key, value) => {
+        Storage.cache[key] = value;
         localStorage.setItem(key, value);
     },
     remove: (key) => {
+        delete Storage.cache[key];
         localStorage.removeItem(key);
     },
+    invalidate: (key) => {
+        delete Storage.cache[key];
+    },
     getJSON: (key, defaultVal = []) => {
-        const val = localStorage.getItem(key);
-        try {
-            return val ? JSON.parse(val) : defaultVal;
-        } catch (e) {
-            return defaultVal;
+        let parsed;
+        if (Storage.cache[key] !== undefined && typeof Storage.cache[key] !== 'string') {
+            parsed = Storage.cache[key];
+        } else {
+            const val = localStorage.getItem(key);
+            try {
+                parsed = val ? JSON.parse(val) : defaultVal;
+                Storage.cache[key] = parsed;
+            } catch (e) {
+                parsed = defaultVal;
+            }
         }
+        // Return a clone to prevent accidental reference mutation bugs across contexts
+        return Array.isArray(parsed) ? [...parsed] : (typeof parsed === 'object' && parsed !== null ? { ...parsed } : parsed);
     },
     setJSON: (key, value) => {
+        Storage.cache[key] = value;
         localStorage.setItem(key, JSON.stringify(value));
     },
 
     // Session Storage
     getSessionJSON: (key, defaultVal = []) => {
-        const val = sessionStorage.getItem(key);
-        try {
-            return val ? JSON.parse(val) : defaultVal;
-        } catch (e) {
-            return defaultVal;
+        let parsed;
+        if (Storage.sessionCache[key] !== undefined) {
+            parsed = Storage.sessionCache[key];
+        } else {
+            const val = sessionStorage.getItem(key);
+            try {
+                parsed = val ? JSON.parse(val) : defaultVal;
+                Storage.sessionCache[key] = parsed;
+            } catch (e) {
+                parsed = defaultVal;
+            }
         }
+        // Return a clone
+        return Array.isArray(parsed) ? [...parsed] : (typeof parsed === 'object' && parsed !== null ? { ...parsed } : parsed);
     },
     setSessionJSON: (key, value) => {
+        Storage.sessionCache[key] = value;
         sessionStorage.setItem(key, JSON.stringify(value));
     }
 };
@@ -375,25 +400,39 @@ const UI = {
         const panel = document.getElementById('hege-panel');
         if (!panel) return;
 
-        // Target the Main Menu (Hamburger - 2 lines)
-        const svgs = document.querySelectorAll('svg');
+        // Optimization: Try to find anchor in a more restricted scope first
         let anchor = null;
+        const navSelectors = ['div[role="navigation"]', 'header', 'nav', 'div[style*="position: fixed"]'];
 
-        for (let svg of svgs) {
-            const label = (svg.getAttribute('aria-label') || '').trim();
-            // Debug Log for Anchor Search (Uncommented for debugging)
-            // if (CONFIG.DEBUG_MODE && Math.random() < 0.05) console.log('[留友封] Scanning SVGs...', label);
+        for (const selector of navSelectors) {
+            const container = document.querySelector(selector);
+            if (!container) continue;
 
-            if (label === '功能表' || label === 'Menu' || label === 'Settings' || label === '設定' || label === '更多選項') {
-                anchor = svg.closest('div[role="button"]') || svg;
-                // console.log('[留友封] Found Anchor by Label:', label);
-                break;
+            const svgs = container.querySelectorAll('svg');
+            for (let svg of svgs) {
+                const label = (svg.getAttribute('aria-label') || '').trim();
+                if (label === '功能表' || label === 'Menu' || label === 'Settings' || label === '設定' || label === '更多選項') {
+                    anchor = svg.closest('div[role="button"]') || svg;
+                    break;
+                }
+                const rects = svg.querySelectorAll('rect, line');
+                if (rects.length === 2 && svg.getBoundingClientRect().top < 100) {
+                    anchor = svg.closest('div[role="button"]') || svg;
+                    break;
+                }
             }
-            const rects = svg.querySelectorAll('rect, line');
-            if (rects.length === 2 && svg.getBoundingClientRect().top < 100) {
-                anchor = svg.closest('div[role="button"]') || svg;
-                // console.log('[留友封] Found Anchor by Shape (Hamburger)');
-                break;
+            if (anchor) break;
+        }
+
+        // Fallback to broader search only if needed and not recently checked
+        if (!anchor) {
+            const svgs = document.querySelectorAll('svg');
+            for (let svg of svgs) {
+                const label = (svg.getAttribute('aria-label') || '').trim();
+                if (label === '功能表' || label === 'Menu' || label === 'Settings' || label === '設定' | label === '更多選項') {
+                    anchor = svg.closest('div[role="button"]') || svg;
+                    break;
+                }
             }
         }
 
@@ -487,42 +526,74 @@ const Core = {
         }
     },
 
+    observer: null,
     startScanner: () => {
-        // Scanner Loop
-        setInterval(Core.scanAndInject, 1500);
+        // Optimization: Use MutationObserver instead of fixed interval for most cases
+        if (Core.observer) Core.observer.disconnect();
+
+        Core.observer = new MutationObserver((mutations) => {
+            let shouldScan = false;
+            for (const mutation of mutations) {
+                if (mutation.addedNodes.length > 0) {
+                    shouldScan = true; break;
+                }
+            }
+            if (shouldScan) Core.scanAndInject();
+        });
+
+        Core.observer.observe(document.body, { childList: true, subtree: true });
+
+        // Backup polling (much slower) just in case
+        setInterval(Core.scanAndInject, 5000);
         Core.scanAndInject();
     },
 
     saveToDB: (username) => {
         if (!username) return;
         username = username.replace('@', '').trim();
-        let db = new Set(Storage.getJSON(CONFIG.KEYS.DB_KEY));
-        db.add(username);
-        Storage.setJSON(CONFIG.KEYS.DB_KEY, [...db]);
+        let dbArray = Storage.getJSON(CONFIG.KEYS.DB_KEY, []);
+        let db = new Set(dbArray);
+        if (!db.has(username)) {
+            db.add(username);
+            Storage.setJSON(CONFIG.KEYS.DB_KEY, [...db]);
+        }
     },
 
     scanAndInject: () => {
-        // ... (Same as in previous step, abbreviated here for clarity in plan, but full in file)
+        // Performance: Only run if window is active/visible to save CPU
+        if (document.hidden) return;
+
         const moreSvgs = document.querySelectorAll(CONFIG.SELECTORS.MORE_SVG);
+        if (moreSvgs.length === 0) return;
+
+        // Optimization: Cache DB lookup
+        const db = new Set(Storage.getJSON(CONFIG.KEYS.DB_KEY));
+
         moreSvgs.forEach(svg => {
             const btn = svg.closest('div[role="button"]');
             if (!btn || !btn.parentElement) return;
+
+            // Check if already processed
+            if (btn.getAttribute('data-hege-checked') === 'true') return;
+            if (btn.parentElement.querySelector('.hege-checkbox-container')) {
+                btn.setAttribute('data-hege-checked', 'true');
+                return;
+            }
+
+            // SVG filtering
             if (!svg.querySelector('circle') && !svg.querySelector('path')) return;
             const viewBox = svg.getAttribute('viewBox');
             if (viewBox === '0 0 12 12' || viewBox === '0 0 13 12') return;
             const width = svg.style.width ? parseInt(svg.style.width) : 24;
             if (width < 16 && svg.clientWidth < 16) return;
-            if (btn.parentElement.querySelector('.hege-checkbox-container')) return;
-            if (btn.getAttribute('data-hege-checked') === 'true') return;
 
             btn.setAttribute('data-hege-checked', 'true');
             btn.style.transition = 'transform 0.2s';
             btn.style.transform = 'translateX(-45px)';
-            btn.style.transform = 'translateX(-45px)';
+
             const container = document.createElement('div');
             container.className = 'hege-checkbox-container';
 
-            // v1.1.2/Beta46 Logic: Use DOM methods instead of innerHTML
             const svgIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
             svgIcon.setAttribute("viewBox", "0 0 24 24");
             svgIcon.classList.add("hege-svg-icon");
@@ -541,43 +612,127 @@ const Core = {
 
             svgIcon.appendChild(rect); svgIcon.appendChild(path);
             container.appendChild(svgIcon);
+
             let username = null;
             try {
                 let p = btn.parentElement; let foundLink = null;
-                for (let i = 0; i < 5; i++) { if (!p) break; foundLink = p.querySelector('a[href^="/@"]'); if (foundLink) break; p = p.parentElement; }
-                if (foundLink) { username = foundLink.getAttribute('href').split('/@')[1].split('/')[0]; if (username) { btn.dataset.username = username; container.dataset.username = username; } }
+                for (let i = 0; i < 5; i++) {
+                    if (!p) break;
+                    foundLink = p.querySelector('a[href^="/@"]');
+                    if (foundLink) break;
+                    p = p.parentElement;
+                }
+                if (foundLink) {
+                    username = foundLink.getAttribute('href').split('/@')[1].split('/')[0];
+                    if (username) {
+                        btn.dataset.username = username;
+                        container.dataset.username = username;
+                    }
+                }
             } catch (e) { }
-            if (username && Core.pendingUsers.has(username)) { container.classList.add('checked'); Core.blockQueue.add(btn); }
+
+            if (username) {
+                if (db.has(username)) {
+                    container.classList.add('finished');
+                } else if (Core.pendingUsers.has(username)) {
+                    container.classList.add('checked');
+                    Core.blockQueue.add(btn);
+                }
+            }
+
             container.ontouchend = (e) => e.stopPropagation();
             container.onclick = (e) => {
                 e.stopPropagation();
-                let db = new Set(Storage.getJSON(CONFIG.KEYS.DB_KEY));
+                const currentDB = new Set(Storage.getJSON(CONFIG.KEYS.DB_KEY));
                 if (container.classList.contains('finished')) {
-                    if (username) { db.delete(username); Storage.setJSON(CONFIG.KEYS.DB_KEY, [...db]); container.classList.remove('finished'); container.classList.add('checked'); Core.blockQueue.add(btn); Core.pendingUsers.add(username); Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]); UI.showToast('已重置並重新加入排程'); }
+                    if (username) {
+                        currentDB.delete(username);
+                        Storage.setJSON(CONFIG.KEYS.DB_KEY, [...currentDB]);
+                        container.classList.remove('finished');
+                        container.classList.add('checked');
+                        Core.blockQueue.add(btn);
+                        Core.pendingUsers.add(username);
+                        Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
+                        UI.showToast('已重置並重新加入排程');
+                    }
                     Core.updateControllerUI(); return;
                 }
-                if (container.classList.contains('checked')) { container.classList.remove('checked'); Core.blockQueue.delete(btn); if (username) { Core.pendingUsers.delete(username); Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]); } }
-                else { container.classList.add('checked'); Core.blockQueue.add(btn); if (username) { Core.pendingUsers.add(username); Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]); } }
+                if (container.classList.contains('checked')) {
+                    container.classList.remove('checked');
+                    Core.blockQueue.delete(btn);
+                    if (username) {
+                        Core.pendingUsers.delete(username);
+                        Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
+                    }
+                }
+                else {
+                    container.classList.add('checked');
+                    Core.blockQueue.add(btn);
+                    if (username) {
+                        Core.pendingUsers.add(username);
+                        Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
+                    }
+                }
                 Core.updateControllerUI();
             };
-            try { const ps = window.getComputedStyle(btn.parentElement).position; if (ps === 'static') btn.parentElement.style.position = 'relative'; btn.parentElement.insertBefore(container, btn); } catch (e) { }
+
+            try {
+                const ps = window.getComputedStyle(btn.parentElement).position;
+                if (ps === 'static') btn.parentElement.style.position = 'relative';
+                btn.parentElement.insertBefore(container, btn);
+            } catch (e) { }
         });
     },
 
     updateControllerUI: () => {
+        // Throttled UI update logic (proper deferral to prevent missed updates)
+        if (Core._uiUpdatePending) return;
+
+        const now = Date.now();
+        const timeSinceLast = now - (Core._lastUIUpdate || 0);
+
+        if (timeSinceLast < 500) {
+            Core._uiUpdatePending = setTimeout(() => {
+                Core._uiUpdatePending = null;
+                Core.updateControllerUI();
+            }, 500 - timeSinceLast);
+            return;
+        }
+
+        Core._lastUIUpdate = now;
+        Core._uiUpdatePending = null;
+
         const db = new Set(Storage.getJSON(CONFIG.KEYS.DB_KEY));
+
+        // Global cleanup
+        let pendingChanged = false;
+        for (const u of Core.pendingUsers) {
+            if (db.has(u)) {
+                Core.pendingUsers.delete(u);
+                pendingChanged = true;
+            }
+        }
+        if (pendingChanged) Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
+
+        // Only update visible elements or those that need state change
         document.querySelectorAll('.hege-checkbox-container').forEach(el => {
             const u = el.dataset.username;
-            if (u && db.has(u) && !el.classList.contains('finished')) {
-                el.classList.add('finished'); el.classList.remove('checked');
-                if (Core.pendingUsers.has(u)) { Core.pendingUsers.delete(u); Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]); }
+            if (u && db.has(u)) {
+                if (!el.classList.contains('finished')) {
+                    el.classList.add('finished');
+                    el.classList.remove('checked');
+                }
+            } else if (u && !db.has(u) && el.classList.contains('finished')) {
+                el.classList.remove('finished');
             }
         });
-        const selCount = document.getElementById('hege-sel-count'); if (selCount) selCount.textContent = `${Core.pendingUsers.size} 選取`;
+
+        const selCount = document.getElementById('hege-sel-count');
+        if (selCount) selCount.textContent = `${Core.pendingUsers.size} 選取`;
+
         const panel = document.getElementById('hege-panel');
         if (!panel) return;
 
-        // --- Failed Queue UI Sync ---
         const failedQueue = Storage.getJSON(CONFIG.KEYS.FAILED_QUEUE, []);
         const retryItem = document.getElementById('hege-retry-failed-item');
         if (retryItem) {
@@ -590,19 +745,22 @@ const Core = {
             }
         }
 
-        const badge = document.getElementById('hege-queue-badge'); if (badge) badge.textContent = Core.pendingUsers.size > 0 ? `(${Core.pendingUsers.size})` : '';
+        let badgeText = Core.pendingUsers.size > 0 ? `(${Core.pendingUsers.size})` : '';
 
         let shouldShowStop = false;
         let mainText = '開始封鎖';
-        let headerColor = '#333';
+        let headerColor = 'transparent'; // Use transparent or theme color
 
         const bgStatus = Storage.getJSON(CONFIG.KEYS.BG_STATUS, {});
-        // TODO: Time check logic
         if (bgStatus.state === 'running' && (Date.now() - (bgStatus.lastUpdate || 0) < 10000)) {
             shouldShowStop = true;
-            mainText = `背景執行中 ${bgStatus.progress}/${bgStatus.total}`;
+            mainText = `背景執行中 剩餘 ${bgStatus.total}`;
             headerColor = '#4cd964';
+            badgeText = `(${bgStatus.total}剩餘)`; // Show progress in header badge explicitly
         }
+
+        const badge = document.getElementById('hege-queue-badge');
+        if (badge) badge.textContent = badgeText;
 
         const stopBtn = document.getElementById('hege-stop-btn-item'); if (stopBtn) stopBtn.style.display = shouldShowStop ? 'flex' : 'none';
         const mainItem = document.getElementById('hege-main-btn-item');
@@ -1012,10 +1170,8 @@ const Worker = {
 
             // 1. Wait for "More" button (Polling up to 12s)
             let profileBtn = null;
+
             for (let i = 0; i < 25; i++) {
-                // Focus: User provided specific SVG.
-                // Structure: <circle> + 3 <path>s.
-                // Aria: "更多" or "More"
                 const moreSvgs = document.querySelectorAll('svg[aria-label="更多"], svg[aria-label="More"]');
                 for (let svg of moreSvgs) {
                     // Check structure to distinguish from other "More" icons
@@ -1106,11 +1262,17 @@ const Worker = {
             }
 
             if (!confirmBtn) {
-                // Check dialog buttons fallback
+                // Check dialog buttons fallback safely
                 const dialog = document.querySelector('div[role="dialog"]');
                 if (dialog) {
                     const dialogBtns = dialog.querySelectorAll('div[role="button"]');
-                    if (dialogBtns.length > 0) confirmBtn = dialogBtns[dialogBtns.length - 1];
+                    for (let j = dialogBtns.length - 1; j >= 0; j--) {
+                        const style = window.getComputedStyle(dialogBtns[j]);
+                        if (style.color === 'rgb(255, 59, 48)' || dialogBtns[j].innerText.includes('封鎖') || dialogBtns[j].innerText.includes('Block')) {
+                            confirmBtn = dialogBtns[j];
+                            break;
+                        }
+                    }
                 }
             }
 
@@ -1237,10 +1399,16 @@ const Worker = {
             // Sync Logic (Restored from beta46)
             window.addEventListener('storage', (e) => {
                 if (e.key === CONFIG.KEYS.BG_STATUS || e.key === CONFIG.KEYS.DB_KEY || e.key === CONFIG.KEYS.BG_QUEUE) {
+                    Storage.invalidate(e.key); // Force cache clear so getJSON fetches fresh data
                     Core.updateControllerUI();
                 }
             });
-            setInterval(Core.updateControllerUI, 2000); // Polling backup
+            setInterval(() => {
+                Storage.invalidate(CONFIG.KEYS.DB_KEY);
+                Storage.invalidate(CONFIG.KEYS.BG_STATUS);
+                Storage.invalidate(CONFIG.KEYS.BG_QUEUE);
+                Core.updateControllerUI();
+            }, 2000); // Polling backup
 
             // Env Log
             const isIPad = navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
