@@ -218,25 +218,39 @@ export const UI = {
         const panel = document.getElementById('hege-panel');
         if (!panel) return;
 
-        // Target the Main Menu (Hamburger - 2 lines)
-        const svgs = document.querySelectorAll('svg');
+        // Optimization: Try to find anchor in a more restricted scope first
         let anchor = null;
+        const navSelectors = ['div[role="navigation"]', 'header', 'nav', 'div[style*="position: fixed"]'];
 
-        for (let svg of svgs) {
-            const label = (svg.getAttribute('aria-label') || '').trim();
-            // Debug Log for Anchor Search (Uncommented for debugging)
-            // if (CONFIG.DEBUG_MODE && Math.random() < 0.05) console.log('[留友封] Scanning SVGs...', label);
+        for (const selector of navSelectors) {
+            const container = document.querySelector(selector);
+            if (!container) continue;
 
-            if (label === '功能表' || label === 'Menu' || label === 'Settings' || label === '設定' || label === '更多選項') {
-                anchor = svg.closest('div[role="button"]') || svg;
-                // console.log('[留友封] Found Anchor by Label:', label);
-                break;
+            const svgs = container.querySelectorAll('svg');
+            for (let svg of svgs) {
+                const label = (svg.getAttribute('aria-label') || '').trim();
+                if (label === '功能表' || label === 'Menu' || label === 'Settings' || label === '設定' || label === '更多選項') {
+                    anchor = svg.closest('div[role="button"]') || svg;
+                    break;
+                }
+                const rects = svg.querySelectorAll('rect, line');
+                if (rects.length === 2 && svg.getBoundingClientRect().top < 100) {
+                    anchor = svg.closest('div[role="button"]') || svg;
+                    break;
+                }
             }
-            const rects = svg.querySelectorAll('rect, line');
-            if (rects.length === 2 && svg.getBoundingClientRect().top < 100) {
-                anchor = svg.closest('div[role="button"]') || svg;
-                // console.log('[留友封] Found Anchor by Shape (Hamburger)');
-                break;
+            if (anchor) break;
+        }
+
+        // Fallback to broader search only if needed and not recently checked
+        if (!anchor) {
+            const svgs = document.querySelectorAll('svg');
+            for (let svg of svgs) {
+                const label = (svg.getAttribute('aria-label') || '').trim();
+                if (label === '功能表' || label === 'Menu' || label === 'Settings' || label === '設定' | label === '更多選項') {
+                    anchor = svg.closest('div[role="button"]') || svg;
+                    break;
+                }
             }
         }
 

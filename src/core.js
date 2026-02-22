@@ -22,42 +22,74 @@ export const Core = {
         }
     },
 
+    observer: null,
     startScanner: () => {
-        // Scanner Loop
-        setInterval(Core.scanAndInject, 1500);
+        // Optimization: Use MutationObserver instead of fixed interval for most cases
+        if (Core.observer) Core.observer.disconnect();
+
+        Core.observer = new MutationObserver((mutations) => {
+            let shouldScan = false;
+            for (const mutation of mutations) {
+                if (mutation.addedNodes.length > 0) {
+                    shouldScan = true; break;
+                }
+            }
+            if (shouldScan) Core.scanAndInject();
+        });
+
+        Core.observer.observe(document.body, { childList: true, subtree: true });
+
+        // Backup polling (much slower) just in case
+        setInterval(Core.scanAndInject, 5000);
         Core.scanAndInject();
     },
 
     saveToDB: (username) => {
         if (!username) return;
         username = username.replace('@', '').trim();
-        let db = new Set(Storage.getJSON(CONFIG.KEYS.DB_KEY));
-        db.add(username);
-        Storage.setJSON(CONFIG.KEYS.DB_KEY, [...db]);
+        let dbArray = Storage.getJSON(CONFIG.KEYS.DB_KEY, []);
+        let db = new Set(dbArray);
+        if (!db.has(username)) {
+            db.add(username);
+            Storage.setJSON(CONFIG.KEYS.DB_KEY, [...db]);
+        }
     },
 
     scanAndInject: () => {
-        // ... (Same as in previous step, abbreviated here for clarity in plan, but full in file)
+        // Performance: Only run if window is active/visible to save CPU
+        if (document.hidden) return;
+
         const moreSvgs = document.querySelectorAll(CONFIG.SELECTORS.MORE_SVG);
+        if (moreSvgs.length === 0) return;
+
+        // Optimization: Cache DB lookup
+        const db = new Set(Storage.getJSON(CONFIG.KEYS.DB_KEY));
+
         moreSvgs.forEach(svg => {
             const btn = svg.closest('div[role="button"]');
             if (!btn || !btn.parentElement) return;
+
+            // Check if already processed
+            if (btn.getAttribute('data-hege-checked') === 'true') return;
+            if (btn.parentElement.querySelector('.hege-checkbox-container')) {
+                btn.setAttribute('data-hege-checked', 'true');
+                return;
+            }
+
+            // SVG filtering
             if (!svg.querySelector('circle') && !svg.querySelector('path')) return;
             const viewBox = svg.getAttribute('viewBox');
             if (viewBox === '0 0 12 12' || viewBox === '0 0 13 12') return;
             const width = svg.style.width ? parseInt(svg.style.width) : 24;
             if (width < 16 && svg.clientWidth < 16) return;
-            if (btn.parentElement.querySelector('.hege-checkbox-container')) return;
-            if (btn.getAttribute('data-hege-checked') === 'true') return;
 
             btn.setAttribute('data-hege-checked', 'true');
             btn.style.transition = 'transform 0.2s';
             btn.style.transform = 'translateX(-45px)';
-            btn.style.transform = 'translateX(-45px)';
+
             const container = document.createElement('div');
             container.className = 'hege-checkbox-container';
 
-            // v1.1.2/Beta46 Logic: Use DOM methods instead of innerHTML
             const svgIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
             svgIcon.setAttribute("viewBox", "0 0 24 24");
             svgIcon.classList.add("hege-svg-icon");
@@ -76,43 +108,109 @@ export const Core = {
 
             svgIcon.appendChild(rect); svgIcon.appendChild(path);
             container.appendChild(svgIcon);
+
             let username = null;
             try {
                 let p = btn.parentElement; let foundLink = null;
-                for (let i = 0; i < 5; i++) { if (!p) break; foundLink = p.querySelector('a[href^="/@"]'); if (foundLink) break; p = p.parentElement; }
-                if (foundLink) { username = foundLink.getAttribute('href').split('/@')[1].split('/')[0]; if (username) { btn.dataset.username = username; container.dataset.username = username; } }
+                for (let i = 0; i < 5; i++) {
+                    if (!p) break;
+                    foundLink = p.querySelector('a[href^="/@"]');
+                    if (foundLink) break;
+                    p = p.parentElement;
+                }
+                if (foundLink) {
+                    username = foundLink.getAttribute('href').split('/@')[1].split('/')[0];
+                    if (username) {
+                        btn.dataset.username = username;
+                        container.dataset.username = username;
+                    }
+                }
             } catch (e) { }
-            if (username && Core.pendingUsers.has(username)) { container.classList.add('checked'); Core.blockQueue.add(btn); }
+
+            if (username) {
+                if (db.has(username)) {
+                    container.classList.add('finished');
+                } else if (Core.pendingUsers.has(username)) {
+                    container.classList.add('checked');
+                    Core.blockQueue.add(btn);
+                }
+            }
+
             container.ontouchend = (e) => e.stopPropagation();
             container.onclick = (e) => {
                 e.stopPropagation();
-                let db = new Set(Storage.getJSON(CONFIG.KEYS.DB_KEY));
+                const currentDB = new Set(Storage.getJSON(CONFIG.KEYS.DB_KEY));
                 if (container.classList.contains('finished')) {
-                    if (username) { db.delete(username); Storage.setJSON(CONFIG.KEYS.DB_KEY, [...db]); container.classList.remove('finished'); container.classList.add('checked'); Core.blockQueue.add(btn); Core.pendingUsers.add(username); Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]); UI.showToast('已重置並重新加入排程'); }
+                    if (username) {
+                        currentDB.delete(username);
+                        Storage.setJSON(CONFIG.KEYS.DB_KEY, [...currentDB]);
+                        container.classList.remove('finished');
+                        container.classList.add('checked');
+                        Core.blockQueue.add(btn);
+                        Core.pendingUsers.add(username);
+                        Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
+                        UI.showToast('已重置並重新加入排程');
+                    }
                     Core.updateControllerUI(); return;
                 }
-                if (container.classList.contains('checked')) { container.classList.remove('checked'); Core.blockQueue.delete(btn); if (username) { Core.pendingUsers.delete(username); Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]); } }
-                else { container.classList.add('checked'); Core.blockQueue.add(btn); if (username) { Core.pendingUsers.add(username); Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]); } }
+                if (container.classList.contains('checked')) {
+                    container.classList.remove('checked');
+                    Core.blockQueue.delete(btn);
+                    if (username) {
+                        Core.pendingUsers.delete(username);
+                        Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
+                    }
+                }
+                else {
+                    container.classList.add('checked');
+                    Core.blockQueue.add(btn);
+                    if (username) {
+                        Core.pendingUsers.add(username);
+                        Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
+                    }
+                }
                 Core.updateControllerUI();
             };
-            try { const ps = window.getComputedStyle(btn.parentElement).position; if (ps === 'static') btn.parentElement.style.position = 'relative'; btn.parentElement.insertBefore(container, btn); } catch (e) { }
+
+            try {
+                const ps = window.getComputedStyle(btn.parentElement).position;
+                if (ps === 'static') btn.parentElement.style.position = 'relative';
+                btn.parentElement.insertBefore(container, btn);
+            } catch (e) { }
         });
     },
 
     updateControllerUI: () => {
+        // Throttled UI update logic
+        const now = Date.now();
+        if (Core._lastUIUpdate && now - Core._lastUIUpdate < 500) return;
+        Core._lastUIUpdate = now;
+
         const db = new Set(Storage.getJSON(CONFIG.KEYS.DB_KEY));
+
+        // Only update visible elements or those that need state change
         document.querySelectorAll('.hege-checkbox-container').forEach(el => {
             const u = el.dataset.username;
-            if (u && db.has(u) && !el.classList.contains('finished')) {
-                el.classList.add('finished'); el.classList.remove('checked');
-                if (Core.pendingUsers.has(u)) { Core.pendingUsers.delete(u); Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]); }
+            if (u && db.has(u)) {
+                if (!el.classList.contains('finished')) {
+                    el.classList.add('finished');
+                    el.classList.remove('checked');
+                    if (Core.pendingUsers.has(u)) {
+                        Core.pendingUsers.delete(u);
+                        Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
+                    }
+                }
+            } else if (u && !db.has(u) && el.classList.contains('finished')) {
+                el.classList.remove('finished');
             }
         });
-        const selCount = document.getElementById('hege-sel-count'); if (selCount) selCount.textContent = `${Core.pendingUsers.size} 選取`;
+
+        const selCount = document.getElementById('hege-sel-count');
+        if (selCount) selCount.textContent = `${Core.pendingUsers.size} 選取`;
+
         const panel = document.getElementById('hege-panel');
         if (!panel) return;
 
-        // --- Failed Queue UI Sync ---
         const failedQueue = Storage.getJSON(CONFIG.KEYS.FAILED_QUEUE, []);
         const retryItem = document.getElementById('hege-retry-failed-item');
         if (retryItem) {
@@ -125,14 +223,14 @@ export const Core = {
             }
         }
 
-        const badge = document.getElementById('hege-queue-badge'); if (badge) badge.textContent = Core.pendingUsers.size > 0 ? `(${Core.pendingUsers.size})` : '';
+        const badge = document.getElementById('hege-queue-badge');
+        if (badge) badge.textContent = Core.pendingUsers.size > 0 ? `(${Core.pendingUsers.size})` : '';
 
         let shouldShowStop = false;
         let mainText = '開始封鎖';
-        let headerColor = '#333';
+        let headerColor = 'transparent'; // Use transparent or theme color
 
         const bgStatus = Storage.getJSON(CONFIG.KEYS.BG_STATUS, {});
-        // TODO: Time check logic
         if (bgStatus.state === 'running' && (Date.now() - (bgStatus.lastUpdate || 0) < 10000)) {
             shouldShowStop = true;
             mainText = `背景執行中 ${bgStatus.progress}/${bgStatus.total}`;

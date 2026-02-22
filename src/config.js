@@ -1,5 +1,5 @@
 export const CONFIG = {
-    VERSION: '2.0.1', // Refactor Version
+    VERSION: '2.1', // Performance Optimization Version
     DEBUG_MODE: true,
     DB_KEY: 'hege_block_db_v1',
     KEYS: {
