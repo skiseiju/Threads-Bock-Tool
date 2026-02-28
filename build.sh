@@ -14,13 +14,38 @@ TEMP_BUNDLE="$DIST_DIR/temp_bundle.js"
 
 # Auto-increment Version Logic
 OLD_VERSION="$(grep -oE "VERSION: '[^']+'" "$SRC_DIR/config.js" | cut -d "'" -f 2)"
-# Bump the last segment of the version string (e.g. 2.0.0.9 -> 2.0.0.10)
-APP_VERSION=$(echo "$OLD_VERSION" | awk -F. '{$NF = $NF + 1;} 1' | sed 's/ /./g')
 
-echo "Version Bumping: $OLD_VERSION -> $APP_VERSION"
+if [[ "$1" == "--release" ]]; then
+    # Drop beta tag if it exists (e.g., 2.0.6-beta1 -> 2.0.6)
+    if [[ "$OLD_VERSION" == *"-beta"* ]]; then
+        APP_VERSION=$(echo "$OLD_VERSION" | sed -E 's/-beta.*//')
+    else
+        # Otherwise, bump the patch version string (e.g. 2.0.6 -> 2.0.7)
+        APP_VERSION=$(echo "$OLD_VERSION" | awk -F. '{$NF = $NF + 1;} 1' | sed 's/ /./g')
+    fi
+elif [[ "$1" == "--no-bump" ]]; then
+    # Keep the current version
+    APP_VERSION="$OLD_VERSION"
+else
+    # Bump or add beta tag
+    if [[ "$OLD_VERSION" == *"-beta"* ]]; then
+        BASE=$(echo "$OLD_VERSION" | sed -E 's/-beta.*//')
+        BETA_NUM=$(echo "$OLD_VERSION" | grep -oE '-beta[0-9]+' | grep -oE '[0-9]+')
+        APP_VERSION="$BASE-beta$((BETA_NUM + 1))"
+    else
+        # E.g. 2.0.6 -> 2.0.7-beta1
+        BASE=$(echo "$OLD_VERSION" | awk -F. '{$NF = $NF + 1;} 1' | sed 's/ /./g')
+        APP_VERSION="$BASE-beta1"
+    fi
+fi
 
-# Write the new version back to config.js
-sed -i '' -E "s/VERSION: '$OLD_VERSION'/VERSION: '$APP_VERSION'/" "$SRC_DIR/config.js"
+if [[ "$APP_VERSION" != "$OLD_VERSION" ]]; then
+    echo "Version Bumping: $OLD_VERSION -> $APP_VERSION"
+    # Write the new version back to config.js
+    sed -i '' -E "s/VERSION: '$OLD_VERSION'/VERSION: '$APP_VERSION'/" "$SRC_DIR/config.js"
+else
+    echo "Building current version: $APP_VERSION"
+fi
 
 echo "(function() {" > "$TEMP_BUNDLE"
 echo "    'use strict';" >> "$TEMP_BUNDLE"
