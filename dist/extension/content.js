@@ -1,9 +1,9 @@
 (function() {
     'use strict';
-    console.log('[HegeBlock] Content Script Injected, Version: 2.0.7');
+    console.log('[HegeBlock] Content Script Injected, Version: 2.0.14');
 // --- config.js ---
 const CONFIG = {
-    VERSION: '2.0.7', // Performance Optimization Version
+    VERSION: '2.0.14', // Performance Optimization Version
     DEBUG_MODE: true,
     DB_KEY: 'hege_block_db_v1',
     KEYS: {
@@ -510,6 +510,9 @@ const UI = {
 const Core = {
     blockQueue: new Set(),
     pendingUsers: new Set(),
+    lastClickedBtn: null, // Track for shift-click
+    lastClickedUsername: null, // Fallback if DOM node is lost
+    lastClickedState: null, // null, 'checked', or 'unchecked'
 
     init: () => {
         Core.pendingUsers = new Set(Storage.getSessionJSON(CONFIG.KEYS.PENDING));
@@ -546,6 +549,10 @@ const Core = {
         // Backup polling (much slower) just in case
         setInterval(Core.scanAndInject, 5000);
         Core.scanAndInject();
+
+        // React often swallows events or stops propagation.
+        // We now bind `addEventListener('click', Core.handleGlobalClick, true)` 
+        // directly to the initialized containers instead of window to prevent click-through.
     },
 
     saveToDB: (username) => {
@@ -640,41 +647,18 @@ const Core = {
                 }
             }
 
-            container.ontouchend = (e) => e.stopPropagation();
-            container.onclick = (e) => {
-                e.stopPropagation();
-                const currentDB = new Set(Storage.getJSON(CONFIG.KEYS.DB_KEY));
-                if (container.classList.contains('finished')) {
-                    if (username) {
-                        currentDB.delete(username);
-                        Storage.setJSON(CONFIG.KEYS.DB_KEY, [...currentDB]);
-                        container.classList.remove('finished');
-                        container.classList.add('checked');
-                        Core.blockQueue.add(btn);
-                        Core.pendingUsers.add(username);
-                        Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
-                        UI.showToast('已重置並重新加入排程');
-                    }
-                    Core.updateControllerUI(); return;
+            container.ontouchend = (e) => {
+                if (e.target.closest('.hege-checkbox-container')) {
+                    e.stopPropagation();
                 }
-                if (container.classList.contains('checked')) {
-                    container.classList.remove('checked');
-                    Core.blockQueue.delete(btn);
-                    if (username) {
-                        Core.pendingUsers.delete(username);
-                        Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
-                    }
-                }
-                else {
-                    container.classList.add('checked');
-                    Core.blockQueue.add(btn);
-                    if (username) {
-                        Core.pendingUsers.add(username);
-                        Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
-                    }
-                }
-                Core.updateControllerUI();
             };
+            container.onmousedown = (e) => {
+                if (e.shiftKey) e.preventDefault();
+            };
+
+            // Bind directly to the element using a capture phase listener.
+            // This is the most bulletproof way to intercept clicks before React or <a> tags steal them.
+            container.addEventListener('click', Core.handleGlobalClick, true);
 
             try {
                 const ps = window.getComputedStyle(btn.parentElement).position;
@@ -682,6 +666,100 @@ const Core = {
                 btn.parentElement.insertBefore(container, btn);
             } catch (e) { }
         });
+    },
+
+    handleGlobalClick: (e) => {
+        const container = e.target.closest('.hege-checkbox-container');
+        if (!container) return;
+
+        // Stop propagation IMMEDIATELY to prevent opening user profile or React intercepting
+        e.stopPropagation();
+        e.preventDefault();
+
+        if (CONFIG.DEBUG_MODE) {
+            console.log(`[Shift-Click] Container Matched! ShiftKey: ${e.shiftKey}, anchorUsername: ${Core.lastClickedUsername}`);
+        }
+
+        // --- Shift-Click Multi-Select Logic ---
+        let targetBoxes = [container];
+        if (e.shiftKey && (Core.lastClickedBtn || Core.lastClickedUsername)) {
+            const allBoxes = Array.from(document.querySelectorAll('.hege-checkbox-container'));
+            let lastIdx = allBoxes.indexOf(Core.lastClickedBtn);
+
+            // Fallback: If DOM node was recreated by React, find by username
+            if (lastIdx === -1 && Core.lastClickedUsername) {
+                lastIdx = allBoxes.findIndex(box => box.dataset.username === Core.lastClickedUsername);
+            }
+
+            const currIdx = allBoxes.indexOf(container);
+
+            if (lastIdx !== -1 && currIdx !== -1) {
+                const min = Math.min(lastIdx, currIdx);
+                const max = Math.max(lastIdx, currIdx);
+                targetBoxes = allBoxes.slice(min, max + 1);
+                if (CONFIG.DEBUG_MODE) console.log(`[Shift-Click] Processing ${targetBoxes.length} items from index ${min} to ${max}`);
+            } else {
+                if (CONFIG.DEBUG_MODE) console.log(`[Shift-Click] Failed to establish range. lastIdx: ${lastIdx}, currIdx: ${currIdx}`);
+            }
+        }
+
+        // Determine intended state based on current container
+        const isCurrentlyChecked = container.classList.contains('checked');
+        const isCurrentlyFinished = container.classList.contains('finished');
+
+        let targetAction = 'check'; // Check by default
+        if (isCurrentlyFinished) {
+            targetAction = 'reset';
+        } else if (isCurrentlyChecked) {
+            targetAction = 'uncheck';
+        }
+
+        const currentDB = new Set(Storage.getJSON(CONFIG.KEYS.DB_KEY));
+
+        targetBoxes.forEach(box => {
+            const u = box.dataset.username;
+            const btnElement = box.parentElement; // Used for blockQueue
+
+            if (targetAction === 'reset' && box.classList.contains('finished')) {
+                if (u) {
+                    currentDB.delete(u);
+                    box.classList.remove('finished');
+                    box.classList.add('checked');
+                    if (btnElement) btnElement.dataset.username = u; // Ensure dataset exists safely
+                    if (btnElement) Core.blockQueue.add(btnElement);
+                    Core.pendingUsers.add(u);
+                }
+            } else if (targetAction === 'uncheck' && box.classList.contains('checked')) {
+                box.classList.remove('checked');
+                // Remove from queue where username matches
+                Array.from(Core.blockQueue).forEach(b => {
+                    if (b.dataset && b.dataset.username === u) Core.blockQueue.delete(b);
+                });
+                if (u) Core.pendingUsers.delete(u);
+            } else if (targetAction === 'check' && !box.classList.contains('checked') && !box.classList.contains('finished')) {
+                box.classList.add('checked');
+                if (btnElement) btnElement.dataset.username = u;
+                if (btnElement) Core.blockQueue.add(btnElement);
+                if (u) Core.pendingUsers.add(u);
+            }
+        });
+
+        if (targetAction === 'reset') {
+            Storage.setJSON(CONFIG.KEYS.DB_KEY, [...currentDB]);
+            UI.showToast('已重置並重新加入排程');
+        }
+
+        Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
+
+        Core.lastClickedBtn = container;
+        Core.lastClickedUsername = container.dataset.username;
+        Core.lastClickedState = targetAction;
+
+        if (CONFIG.DEBUG_MODE) {
+            console.log(`[Shift-Click] State saved. next anchorUsername: ${Core.lastClickedUsername}`);
+        }
+
+        Core.updateControllerUI();
     },
 
     updateControllerUI: () => {
