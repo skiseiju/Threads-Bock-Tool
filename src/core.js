@@ -32,12 +32,16 @@ export const Core = {
 
         Core.observer = new MutationObserver((mutations) => {
             let shouldScan = false;
+            let dialogChanged = false;
             for (const mutation of mutations) {
                 if (mutation.addedNodes.length > 0) {
-                    shouldScan = true; break;
+                    shouldScan = true;
+                    dialogChanged = true;
+                    break;
                 }
             }
             if (shouldScan) Core.scanAndInject();
+            if (dialogChanged) Core.injectDialogBlockAll();
         });
 
         Core.observer.observe(document.body, { childList: true, subtree: true });
@@ -61,6 +65,125 @@ export const Core = {
             Storage.setJSON(CONFIG.KEYS.DB_KEY, [...db]);
         }
     },
+
+    injectDialogBlockAll: () => {
+        const headers = document.querySelectorAll('h1, h2');
+        let header = null;
+        let titleText = '';
+
+        for (let h of headers) {
+            const text = h.innerText.trim();
+            // Restrict to Likes/Reposts dialogs. Activity pane is too broad.
+            if (text.includes('讚') || text.includes('Likes')) {
+                // Ignore the main page "Threads" header if somehow it matched
+                if (text === 'Threads') continue;
+                header = h;
+                titleText = text;
+                break; // Found the most likely modal header
+            }
+        }
+
+        if (!header) return;
+
+        const headerContainer = header.parentElement;
+        if (!headerContainer) return;
+
+        // Ensure we haven't already injected the button
+        if (headerContainer.dataset.hegeDialogInjected) return;
+
+        // Prevent multiple injections
+        headerContainer.dataset.hegeDialogInjected = 'true';
+
+        // Create the Block All Button
+        const blockAllBtn = document.createElement('div');
+        blockAllBtn.className = 'hege-block-all-btn';
+        blockAllBtn.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"></path></svg>
+            <span>同列全封</span>
+        `;
+
+        blockAllBtn.onclick = (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+
+            // Scope the search to the modal context (go up 8 levels)
+            let ctx = header;
+            for (let i = 0; i < 8; i++) {
+                if (ctx.parentElement && ctx.parentElement.tagName !== 'BODY') {
+                    ctx = ctx.parentElement;
+                }
+            }
+
+            // Find all user links in the dialog context
+            const links = ctx.querySelectorAll('a[href^="/@"]');
+            let rawUsers = Array.from(links).map(a => {
+                const href = a.getAttribute('href');
+                return href.split('/@')[1].split('/')[0];
+            });
+
+            // Deduplicate internally
+            rawUsers = [...new Set(rawUsers)];
+
+            // Filter out existing DB, Queue, and Pending users
+            const db = new Set(Storage.getJSON(CONFIG.KEYS.DB_KEY, []));
+            let activeQueue = Storage.getJSON(CONFIG.KEYS.BG_QUEUE, []);
+            const activeSet = new Set(activeQueue);
+
+            const newUsers = rawUsers.filter(u => !db.has(u) && !activeSet.has(u) && !Core.pendingUsers.has(u));
+
+            if (newUsers.length === 0) {
+                UI.showToast('沒有新帳號可加入 (皆已在歷史或排除中)');
+                return;
+            }
+
+            const status = Storage.getJSON(CONFIG.KEYS.BG_STATUS, {});
+            const isRunning = (Date.now() - (status.lastUpdate || 0) < 10000 && status.state === 'running');
+
+            if (confirm(`找到 ${newUsers.length} 筆新名單。\n是否加入封鎖名單？\n(按「取消」不加入，按「確定」加入)`)) {
+                // Confirmed: Add to pending
+                newUsers.forEach(u => Core.pendingUsers.add(u));
+                Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
+
+                if (isRunning) {
+                    const combinedQueue = [...activeQueue, ...Core.pendingUsers];
+                    Storage.setJSON(CONFIG.KEYS.BG_QUEUE, [...new Set(combinedQueue)]);
+                    UI.showToast(`已將畫面上 ${newUsers.length} 筆帳號加入背景排隊`);
+                } else {
+                    if (confirm(`已加入 ${newUsers.length} 筆名單。\n是否立刻啟動背景封鎖？`)) {
+                        const combinedQueue = [...activeQueue, ...Core.pendingUsers];
+                        Storage.setJSON(CONFIG.KEYS.BG_QUEUE, [...new Set(combinedQueue)]);
+                        window.open('https://www.threads.net/?hege_bg=true', 'HegeBlockWorker', 'width=800,height=600');
+                    } else {
+                        UI.showToast(`已加入「${Core.pendingUsers.size} 選取」，請至清單手動啟動`);
+                    }
+                }
+            } else {
+                // Cancelled: Abort
+                UI.showToast('已取消加入名單', 1500);
+            }
+
+            // Sync checkbox visually on current page
+            document.querySelectorAll('.hege-checkbox-container').forEach(box => {
+                if (box.dataset.username && Core.pendingUsers.has(box.dataset.username)) {
+                    box.classList.add('checked');
+                }
+            });
+
+            // CRITICAL: Update floating panel count!
+            Core.updateControllerUI();
+        };
+
+        headerContainer.style.display = 'flex';
+        headerContainer.style.alignItems = 'center';
+
+        // Insert after the h1 so it is placed nicely
+        if (header.nextSibling) {
+            headerContainer.insertBefore(blockAllBtn, header.nextSibling);
+        } else {
+            headerContainer.appendChild(blockAllBtn);
+        }
+    },
+
 
     scanAndInject: () => {
         // Performance: Only run if window is active/visible to save CPU
@@ -90,6 +213,26 @@ export const Core = {
             const width = svg.style.width ? parseInt(svg.style.width) : 24;
             if (width < 16 && svg.clientWidth < 16) return;
 
+            let username = null;
+            try {
+                let p = btn.parentElement; let foundLink = null;
+                for (let i = 0; i < 5; i++) {
+                    if (!p) break;
+                    foundLink = p.querySelector('a[href^="/@"]');
+                    if (foundLink) break;
+                    p = p.parentElement;
+                }
+                if (foundLink) {
+                    username = foundLink.getAttribute('href').split('/@')[1].split('/')[0];
+                }
+            } catch (e) { }
+
+            if (username && username === Utils.getMyUsername()) {
+                // Checkbox should not appear for the user's own account
+                btn.setAttribute('data-hege-checked', 'true');
+                return;
+            }
+
             btn.setAttribute('data-hege-checked', 'true');
             btn.style.transition = 'transform 0.2s';
             btn.style.transform = 'translateX(-45px)';
@@ -116,23 +259,10 @@ export const Core = {
             svgIcon.appendChild(rect); svgIcon.appendChild(path);
             container.appendChild(svgIcon);
 
-            let username = null;
-            try {
-                let p = btn.parentElement; let foundLink = null;
-                for (let i = 0; i < 5; i++) {
-                    if (!p) break;
-                    foundLink = p.querySelector('a[href^="/@"]');
-                    if (foundLink) break;
-                    p = p.parentElement;
-                }
-                if (foundLink) {
-                    username = foundLink.getAttribute('href').split('/@')[1].split('/')[0];
-                    if (username) {
-                        btn.dataset.username = username;
-                        container.dataset.username = username;
-                    }
-                }
-            } catch (e) { }
+            if (username) {
+                btn.dataset.username = username;
+                container.dataset.username = username;
+            }
 
             if (username) {
                 if (db.has(username)) {
@@ -173,7 +303,7 @@ export const Core = {
         e.preventDefault();
 
         if (CONFIG.DEBUG_MODE) {
-            console.log(`[Shift-Click] Container Matched! ShiftKey: ${e.shiftKey}, anchorUsername: ${Core.lastClickedUsername}`);
+            console.log(`[Shift - Click] Container Matched! ShiftKey: ${e.shiftKey}, anchorUsername: ${Core.lastClickedUsername}`);
         }
 
         // --- Shift-Click Multi-Select Logic ---
@@ -193,9 +323,9 @@ export const Core = {
                 const min = Math.min(lastIdx, currIdx);
                 const max = Math.max(lastIdx, currIdx);
                 targetBoxes = allBoxes.slice(min, max + 1);
-                if (CONFIG.DEBUG_MODE) console.log(`[Shift-Click] Processing ${targetBoxes.length} items from index ${min} to ${max}`);
+                if (CONFIG.DEBUG_MODE) console.log(`[Shift - Click] Processing ${targetBoxes.length} items from index ${min} to ${max}`);
             } else {
-                if (CONFIG.DEBUG_MODE) console.log(`[Shift-Click] Failed to establish range. lastIdx: ${lastIdx}, currIdx: ${currIdx}`);
+                if (CONFIG.DEBUG_MODE) console.log(`[Shift - Click] Failed to establish range.lastIdx: ${lastIdx}, currIdx: ${currIdx}`);
             }
         }
 
@@ -252,7 +382,7 @@ export const Core = {
         Core.lastClickedState = targetAction;
 
         if (CONFIG.DEBUG_MODE) {
-            console.log(`[Shift-Click] State saved. next anchorUsername: ${Core.lastClickedUsername}`);
+            console.log(`[Shift - Click] State saved.next anchorUsername: ${Core.lastClickedUsername}`);
         }
 
         Core.updateControllerUI();

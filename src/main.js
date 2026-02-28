@@ -12,8 +12,15 @@ import { Worker } from './worker.js';
     if (Storage.get(CONFIG.KEYS.VERSION_CHECK) !== CONFIG.VERSION) {
         // Cleanup old keys if needed
         Storage.remove(CONFIG.KEYS.IOS_MODE);
+
+        // Aggressively clear all temporary selection and operational queues to prevent ghost data
+        Storage.setSessionJSON(CONFIG.KEYS.PENDING, []);
+        Storage.setJSON(CONFIG.KEYS.BG_QUEUE, []);
+        Storage.setJSON(CONFIG.KEYS.FAILED_QUEUE, []);
+        Storage.setJSON(CONFIG.KEYS.BG_STATUS, {});
+
         Storage.set(CONFIG.KEYS.VERSION_CHECK, CONFIG.VERSION);
-        console.log(`[留友封] Updated to v${CONFIG.VERSION}`);
+        console.log(`[留友封] Updated to v${CONFIG.VERSION}. Cleared all temporary queues.`);
     }
 
     const isBgPage = new URLSearchParams(window.location.search).get('hege_bg') === 'true';
@@ -74,7 +81,22 @@ import { Worker } from './worker.js';
 
             const callbacks = {
                 onMainClick: handleMainButton,
-                onClearSel: () => { Core.pendingUsers.clear(); Storage.setSessionJSON(CONFIG.KEYS.PENDING, []); Core.blockQueue.forEach(b => { b.style.transform = 'none'; b.parentElement.querySelector('.hege-checkbox-container')?.classList.remove('checked'); }); Core.blockQueue.clear(); Core.updateControllerUI(); UI.showToast('已清除'); },
+                onClearSel: () => {
+                    if (confirm('確定要清除目前的「選取清單」與所有「背景排隊」的帳號嗎？\n(這不會影響已完成的封鎖歷史紀錄)')) {
+                        Core.pendingUsers.clear();
+                        Storage.setSessionJSON(CONFIG.KEYS.PENDING, []);
+                        Storage.setJSON(CONFIG.KEYS.BG_QUEUE, []);
+                        Storage.setJSON(CONFIG.KEYS.FAILED_QUEUE, []);
+                        Storage.setJSON(CONFIG.KEYS.BG_STATUS, {});
+                        Core.blockQueue.forEach(b => {
+                            b.style.transform = 'none';
+                            b.parentElement.querySelector('.hege-checkbox-container')?.classList.remove('checked');
+                        });
+                        Core.blockQueue.clear();
+                        Core.updateControllerUI();
+                        UI.showToast('待封鎖清單與背景佇列已全數清除');
+                    }
+                },
                 onClearDB: () => { if (confirm('清空歷史?')) { Storage.setJSON(CONFIG.KEYS.DB_KEY, []); Core.updateControllerUI(); } },
                 onImport: () => Core.importList(),
                 onExport: () => Core.exportHistory(),

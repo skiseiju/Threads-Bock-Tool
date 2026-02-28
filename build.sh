@@ -13,7 +13,7 @@ mkdir -p "$DIST_DIR"
 TEMP_BUNDLE="$DIST_DIR/temp_bundle.js"
 
 # Auto-increment Version Logic
-OLD_VERSION="$(grep -oE "VERSION: '[^']+'" "$SRC_DIR/config.js" | cut -d "'" -f 2)"
+OLD_VERSION="$(grep -oE "VERSION: '[^']+'" "$SRC_DIR/config.js" | cut -d "'" -f 2 | tr -d '\r')"
 
 if [[ "$1" == "--release" ]]; then
     # Drop beta tag if it exists (e.g., 2.0.6-beta1 -> 2.0.6)

@@ -1,6 +1,30 @@
 import { CONFIG } from './config.js';
 
 export const Utils = {
+    _myUsername: null,
+    getMyUsername: () => {
+        if (Utils._myUsername) return Utils._myUsername;
+
+        // Approach: Find the profile link in the navigation bar
+        const allLinks = document.querySelectorAll('a[href^="/@"]');
+        for (let a of allLinks) {
+            // Usually the navigation bar links are outside the main feed role
+            if (!a.closest('main') && !a.closest('div[role="main"]') && !a.closest('div[data-pressable-container="true"]')) {
+                // Profile nav link usually has an SVG or no text
+                if (a.textContent.trim() === '' || a.querySelector('svg')) {
+                    const href = a.getAttribute('href');
+                    if (href) {
+                        const u = href.split('/@')[1].split('/')[0];
+                        if (u) {
+                            Utils._myUsername = u;
+                            return u;
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    },
     sleep: (ms) => new Promise(r => setTimeout(r, ms)),
 
     log: (msg) => {

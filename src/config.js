@@ -1,5 +1,5 @@
 export const CONFIG = {
-    VERSION: '2.0.6', // Performance Optimization Version
+    VERSION: '2.0.7', // Performance Optimization Version
     DEBUG_MODE: true,
     DB_KEY: 'hege_block_db_v1',
     KEYS: {
@@ -20,5 +20,7 @@ export const CONFIG = {
         MORE_SVG: 'svg[aria-label="更多"], svg[aria-label="More"]',
         MENU_ITEM: 'div[role="menuitem"], div[role="button"]',
         DIALOG: 'div[role="dialog"]',
+        DIALOG_HEADER: 'div[role="dialog"] h1',
+        DIALOG_USER_LINK: 'div[role="dialog"] div.html-div a[href^="/@"]',
     }
 };

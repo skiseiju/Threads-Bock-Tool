@@ -25,6 +25,18 @@ export const UI = {
             .hege-checkbox-container.finished .hege-svg-icon { color: #555; }
             .hege-checkbox-container:active { transform: translateY(-50%) scale(0.9); }
             
+            .hege-block-all-btn {
+                display: flex; align-items: center; justify-content: center;
+                gap: 6px; padding: 6px 12px; margin-left: 12px;
+                background-color: rgba(255, 59, 48, 0.1); color: #ff3b30;
+                border: 1px solid rgba(255, 59, 48, 0.3); border-radius: 16px;
+                font-size: 14px; font-weight: bold; cursor: pointer;
+                transition: all 0.2s;
+            }
+            .hege-block-all-btn:hover { background-color: rgba(255, 59, 48, 0.2); }
+            .hege-block-all-btn:active { transform: scale(0.95); }
+            .hege-block-all-btn svg { width: 16px; height: 16px; }
+
             #hege-panel {
                 position: fixed; z-index: 2147483647;
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;

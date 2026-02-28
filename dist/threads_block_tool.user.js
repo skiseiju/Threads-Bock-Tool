@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         留友封 (Threads 封鎖工具)
 // @namespace    http://tampermonkey.net/
-// @version      2.0.6
+// @version      2.0.7
 // @description  Modular Refactor Build
 // @author       海哥
 // @match        https://www.threads.net/*
@@ -14,10 +14,10 @@
 
 (function() {
     'use strict';
-    console.log('[HegeBlock] Content Script Injected, Version: 2.0.6');
+    console.log('[HegeBlock] Content Script Injected, Version: 2.0.7');
 // --- config.js ---
 const CONFIG = {
-    VERSION: '2.0.6', // Performance Optimization Version
+    VERSION: '2.0.7', // Performance Optimization Version
     DEBUG_MODE: true,
     DB_KEY: 'hege_block_db_v1',
     KEYS: {
@@ -38,6 +38,8 @@ const CONFIG = {
         MORE_SVG: 'svg[aria-label="更多"], svg[aria-label="More"]',
         MENU_ITEM: 'div[role="menuitem"], div[role="button"]',
         DIALOG: 'div[role="dialog"]',
+        DIALOG_HEADER: 'div[role="dialog"] h1',
+        DIALOG_USER_LINK: 'div[role="dialog"] div.html-div a[href^="/@"]',
     }
 };
 
@@ -45,6 +47,30 @@ const CONFIG = {
 
 
 const Utils = {
+    _myUsername: null,
+    getMyUsername: () => {
+        if (Utils._myUsername) return Utils._myUsername;
+
+        // Approach: Find the profile link in the navigation bar
+        const allLinks = document.querySelectorAll('a[href^="/@"]');
+        for (let a of allLinks) {
+            // Usually the navigation bar links are outside the main feed role
+            if (!a.closest('main') && !a.closest('div[role="main"]') && !a.closest('div[data-pressable-container="true"]')) {
+                // Profile nav link usually has an SVG or no text
+                if (a.textContent.trim() === '' || a.querySelector('svg')) {
+                    const href = a.getAttribute('href');
+                    if (href) {
+                        const u = href.split('/@')[1].split('/')[0];
+                        if (u) {
+                            Utils._myUsername = u;
+                            return u;
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    },
     sleep: (ms) => new Promise(r => setTimeout(r, ms)),
 
     log: (msg) => {
@@ -221,6 +247,18 @@ const UI = {
             .hege-checkbox-container.finished .hege-svg-icon { color: #555; }
             .hege-checkbox-container:active { transform: translateY(-50%) scale(0.9); }
             
+            .hege-block-all-btn {
+                display: flex; align-items: center; justify-content: center;
+                gap: 6px; padding: 6px 12px; margin-left: 12px;
+                background-color: rgba(255, 59, 48, 0.1); color: #ff3b30;
+                border: 1px solid rgba(255, 59, 48, 0.3); border-radius: 16px;
+                font-size: 14px; font-weight: bold; cursor: pointer;
+                transition: all 0.2s;
+            }
+            .hege-block-all-btn:hover { background-color: rgba(255, 59, 48, 0.2); }
+            .hege-block-all-btn:active { transform: scale(0.95); }
+            .hege-block-all-btn svg { width: 16px; height: 16px; }
+
             #hege-panel {
                 position: fixed; z-index: 2147483647;
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -550,12 +588,16 @@ const Core = {
 
         Core.observer = new MutationObserver((mutations) => {
             let shouldScan = false;
+            let dialogChanged = false;
             for (const mutation of mutations) {
                 if (mutation.addedNodes.length > 0) {
-                    shouldScan = true; break;
+                    shouldScan = true;
+                    dialogChanged = true;
+                    break;
                 }
             }
             if (shouldScan) Core.scanAndInject();
+            if (dialogChanged) Core.injectDialogBlockAll();
         });
 
         Core.observer.observe(document.body, { childList: true, subtree: true });
@@ -579,6 +621,125 @@ const Core = {
             Storage.setJSON(CONFIG.KEYS.DB_KEY, [...db]);
         }
     },
+
+    injectDialogBlockAll: () => {
+        const headers = document.querySelectorAll('h1, h2');
+        let header = null;
+        let titleText = '';
+
+        for (let h of headers) {
+            const text = h.innerText.trim();
+            // Restrict to Likes/Reposts dialogs. Activity pane is too broad.
+            if (text.includes('讚') || text.includes('Likes')) {
+                // Ignore the main page "Threads" header if somehow it matched
+                if (text === 'Threads') continue;
+                header = h;
+                titleText = text;
+                break; // Found the most likely modal header
+            }
+        }
+
+        if (!header) return;
+
+        const headerContainer = header.parentElement;
+        if (!headerContainer) return;
+
+        // Ensure we haven't already injected the button
+        if (headerContainer.dataset.hegeDialogInjected) return;
+
+        // Prevent multiple injections
+        headerContainer.dataset.hegeDialogInjected = 'true';
+
+        // Create the Block All Button
+        const blockAllBtn = document.createElement('div');
+        blockAllBtn.className = 'hege-block-all-btn';
+        blockAllBtn.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"></path></svg>
+            <span>同列全封</span>
+        `;
+
+        blockAllBtn.onclick = (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+
+            // Scope the search to the modal context (go up 8 levels)
+            let ctx = header;
+            for (let i = 0; i < 8; i++) {
+                if (ctx.parentElement && ctx.parentElement.tagName !== 'BODY') {
+                    ctx = ctx.parentElement;
+                }
+            }
+
+            // Find all user links in the dialog context
+            const links = ctx.querySelectorAll('a[href^="/@"]');
+            let rawUsers = Array.from(links).map(a => {
+                const href = a.getAttribute('href');
+                return href.split('/@')[1].split('/')[0];
+            });
+
+            // Deduplicate internally
+            rawUsers = [...new Set(rawUsers)];
+
+            // Filter out existing DB, Queue, and Pending users
+            const db = new Set(Storage.getJSON(CONFIG.KEYS.DB_KEY, []));
+            let activeQueue = Storage.getJSON(CONFIG.KEYS.BG_QUEUE, []);
+            const activeSet = new Set(activeQueue);
+
+            const newUsers = rawUsers.filter(u => !db.has(u) && !activeSet.has(u) && !Core.pendingUsers.has(u));
+
+            if (newUsers.length === 0) {
+                UI.showToast('沒有新帳號可加入 (皆已在歷史或排除中)');
+                return;
+            }
+
+            const status = Storage.getJSON(CONFIG.KEYS.BG_STATUS, {});
+            const isRunning = (Date.now() - (status.lastUpdate || 0) < 10000 && status.state === 'running');
+
+            if (confirm(`找到 ${newUsers.length} 筆新名單。\n是否加入封鎖名單？\n(按「取消」不加入，按「確定」加入)`)) {
+                // Confirmed: Add to pending
+                newUsers.forEach(u => Core.pendingUsers.add(u));
+                Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
+
+                if (isRunning) {
+                    const combinedQueue = [...activeQueue, ...Core.pendingUsers];
+                    Storage.setJSON(CONFIG.KEYS.BG_QUEUE, [...new Set(combinedQueue)]);
+                    UI.showToast(`已將畫面上 ${newUsers.length} 筆帳號加入背景排隊`);
+                } else {
+                    if (confirm(`已加入 ${newUsers.length} 筆名單。\n是否立刻啟動背景封鎖？`)) {
+                        const combinedQueue = [...activeQueue, ...Core.pendingUsers];
+                        Storage.setJSON(CONFIG.KEYS.BG_QUEUE, [...new Set(combinedQueue)]);
+                        window.open('https://www.threads.net/?hege_bg=true', 'HegeBlockWorker', 'width=800,height=600');
+                    } else {
+                        UI.showToast(`已加入「${Core.pendingUsers.size} 選取」，請至清單手動啟動`);
+                    }
+                }
+            } else {
+                // Cancelled: Abort
+                UI.showToast('已取消加入名單', 1500);
+            }
+
+            // Sync checkbox visually on current page
+            document.querySelectorAll('.hege-checkbox-container').forEach(box => {
+                if (box.dataset.username && Core.pendingUsers.has(box.dataset.username)) {
+                    box.classList.add('checked');
+                }
+            });
+
+            // CRITICAL: Update floating panel count!
+            Core.updateControllerUI();
+        };
+
+        headerContainer.style.display = 'flex';
+        headerContainer.style.alignItems = 'center';
+
+        // Insert after the h1 so it is placed nicely
+        if (header.nextSibling) {
+            headerContainer.insertBefore(blockAllBtn, header.nextSibling);
+        } else {
+            headerContainer.appendChild(blockAllBtn);
+        }
+    },
+
 
     scanAndInject: () => {
         // Performance: Only run if window is active/visible to save CPU
@@ -608,6 +769,26 @@ const Core = {
             const width = svg.style.width ? parseInt(svg.style.width) : 24;
             if (width < 16 && svg.clientWidth < 16) return;
 
+            let username = null;
+            try {
+                let p = btn.parentElement; let foundLink = null;
+                for (let i = 0; i < 5; i++) {
+                    if (!p) break;
+                    foundLink = p.querySelector('a[href^="/@"]');
+                    if (foundLink) break;
+                    p = p.parentElement;
+                }
+                if (foundLink) {
+                    username = foundLink.getAttribute('href').split('/@')[1].split('/')[0];
+                }
+            } catch (e) { }
+
+            if (username && username === Utils.getMyUsername()) {
+                // Checkbox should not appear for the user's own account
+                btn.setAttribute('data-hege-checked', 'true');
+                return;
+            }
+
             btn.setAttribute('data-hege-checked', 'true');
             btn.style.transition = 'transform 0.2s';
             btn.style.transform = 'translateX(-45px)';
@@ -634,23 +815,10 @@ const Core = {
             svgIcon.appendChild(rect); svgIcon.appendChild(path);
             container.appendChild(svgIcon);
 
-            let username = null;
-            try {
-                let p = btn.parentElement; let foundLink = null;
-                for (let i = 0; i < 5; i++) {
-                    if (!p) break;
-                    foundLink = p.querySelector('a[href^="/@"]');
-                    if (foundLink) break;
-                    p = p.parentElement;
-                }
-                if (foundLink) {
-                    username = foundLink.getAttribute('href').split('/@')[1].split('/')[0];
-                    if (username) {
-                        btn.dataset.username = username;
-                        container.dataset.username = username;
-                    }
-                }
-            } catch (e) { }
+            if (username) {
+                btn.dataset.username = username;
+                container.dataset.username = username;
+            }
 
             if (username) {
                 if (db.has(username)) {
@@ -691,7 +859,7 @@ const Core = {
         e.preventDefault();
 
         if (CONFIG.DEBUG_MODE) {
-            console.log(`[Shift-Click] Container Matched! ShiftKey: ${e.shiftKey}, anchorUsername: ${Core.lastClickedUsername}`);
+            console.log(`[Shift - Click] Container Matched! ShiftKey: ${e.shiftKey}, anchorUsername: ${Core.lastClickedUsername}`);
         }
 
         // --- Shift-Click Multi-Select Logic ---
@@ -711,9 +879,9 @@ const Core = {
                 const min = Math.min(lastIdx, currIdx);
                 const max = Math.max(lastIdx, currIdx);
                 targetBoxes = allBoxes.slice(min, max + 1);
-                if (CONFIG.DEBUG_MODE) console.log(`[Shift-Click] Processing ${targetBoxes.length} items from index ${min} to ${max}`);
+                if (CONFIG.DEBUG_MODE) console.log(`[Shift - Click] Processing ${targetBoxes.length} items from index ${min} to ${max}`);
             } else {
-                if (CONFIG.DEBUG_MODE) console.log(`[Shift-Click] Failed to establish range. lastIdx: ${lastIdx}, currIdx: ${currIdx}`);
+                if (CONFIG.DEBUG_MODE) console.log(`[Shift - Click] Failed to establish range.lastIdx: ${lastIdx}, currIdx: ${currIdx}`);
             }
         }
 
@@ -770,7 +938,7 @@ const Core = {
         Core.lastClickedState = targetAction;
 
         if (CONFIG.DEBUG_MODE) {
-            console.log(`[Shift-Click] State saved. next anchorUsername: ${Core.lastClickedUsername}`);
+            console.log(`[Shift - Click] State saved.next anchorUsername: ${Core.lastClickedUsername}`);
         }
 
         Core.updateControllerUI();
@@ -1408,8 +1576,15 @@ const Worker = {
     if (Storage.get(CONFIG.KEYS.VERSION_CHECK) !== CONFIG.VERSION) {
         // Cleanup old keys if needed
         Storage.remove(CONFIG.KEYS.IOS_MODE);
+
+        // Aggressively clear all temporary selection and operational queues to prevent ghost data
+        Storage.setSessionJSON(CONFIG.KEYS.PENDING, []);
+        Storage.setJSON(CONFIG.KEYS.BG_QUEUE, []);
+        Storage.setJSON(CONFIG.KEYS.FAILED_QUEUE, []);
+        Storage.setJSON(CONFIG.KEYS.BG_STATUS, {});
+
         Storage.set(CONFIG.KEYS.VERSION_CHECK, CONFIG.VERSION);
-        console.log(`[留友封] Updated to v${CONFIG.VERSION}`);
+        console.log(`[留友封] Updated to v${CONFIG.VERSION}. Cleared all temporary queues.`);
     }
 
     const isBgPage = new URLSearchParams(window.location.search).get('hege_bg') === 'true';
@@ -1470,7 +1645,22 @@ const Worker = {
 
             const callbacks = {
                 onMainClick: handleMainButton,
-                onClearSel: () => { Core.pendingUsers.clear(); Storage.setSessionJSON(CONFIG.KEYS.PENDING, []); Core.blockQueue.forEach(b => { b.style.transform = 'none'; b.parentElement.querySelector('.hege-checkbox-container')?.classList.remove('checked'); }); Core.blockQueue.clear(); Core.updateControllerUI(); UI.showToast('已清除'); },
+                onClearSel: () => {
+                    if (confirm('確定要清除目前的「選取清單」與所有「背景排隊」的帳號嗎？\n(這不會影響已完成的封鎖歷史紀錄)')) {
+                        Core.pendingUsers.clear();
+                        Storage.setSessionJSON(CONFIG.KEYS.PENDING, []);
+                        Storage.setJSON(CONFIG.KEYS.BG_QUEUE, []);
+                        Storage.setJSON(CONFIG.KEYS.FAILED_QUEUE, []);
+                        Storage.setJSON(CONFIG.KEYS.BG_STATUS, {});
+                        Core.blockQueue.forEach(b => {
+                            b.style.transform = 'none';
+                            b.parentElement.querySelector('.hege-checkbox-container')?.classList.remove('checked');
+                        });
+                        Core.blockQueue.clear();
+                        Core.updateControllerUI();
+                        UI.showToast('待封鎖清單與背景佇列已全數清除');
+                    }
+                },
                 onClearDB: () => { if (confirm('清空歷史?')) { Storage.setJSON(CONFIG.KEYS.DB_KEY, []); Core.updateControllerUI(); } },
                 onImport: () => Core.importList(),
                 onExport: () => Core.exportHistory(),
