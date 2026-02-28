@@ -37,7 +37,8 @@
 
 ## 📝 版本紀錄 (Changelog)
 
-### v2.0.7 (Enhancement: Own Account Exclusion)
+### v2.0.7 (Enhancement: Own Account Exclusion & Dialog Block All)
+*   **[Feat] 同列全封 (按讚/轉發名單)**：針對「按讚」或「轉發」等互動名單視窗，新增一鍵「同列全封」按鈕，可一鍵將彈出視窗內所有符合條件的使用者加入背景封鎖排隊。
 *   **[Feat] 排除自我帳號**：新增 `Utils.getMyUsername()` 智能判斷邏輯，掃描時將自動略過使用者本人的貼文或回覆，不再顯示勾選框，有效防止誤鎖自己的帳號。
 *   **[優化] 渲染效能提升**：在建立 DOM 勾選框之前提前進行過濾（Early-return），減少無效渲染，進一步節省記憶體與效能。
 ### v2.0.6 (Feature: Shift-Click Multi-Select)
