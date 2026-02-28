@@ -37,6 +37,9 @@
 
 ## 📝 版本紀錄 (Changelog)
 
+### v2.0.7 (Enhancement: Own Account Exclusion)
+*   **[Feat] 排除自我帳號**：新增 `Utils.getMyUsername()` 智能判斷邏輯，掃描時將自動略過使用者本人的貼文或回覆，不再顯示勾選框，有效防止誤鎖自己的帳號。
+*   **[優化] 渲染效能提升**：在建立 DOM 勾選框之前提前進行過濾（Early-return），減少無效渲染，進一步節省記憶體與效能。
 ### v2.0.6 (Feature: Shift-Click Multi-Select)
 *   **[Feat] Shift 連鎖選取**：新增依循 OS 系統原生的 `Shift + 點擊` 批次選取功能。按住 Shift 點擊可一次勾選或取消勾選範圍內的所有帳號。
 *   **[核心] 強制事件捕獲**：大幅重寫底層點擊監聽架構，改用標靶級的 `Capture Phase` 委派。徹底解決在 Safari Userscript 環境下點擊被吞噬、以及 React 框架干擾導致選取失敗的問題。
