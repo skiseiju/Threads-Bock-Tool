@@ -4,9 +4,10 @@
 
 ## ✨ 主要功能 (Features)
 
-*   **雙模式運作**：
-    *   **前景模式 (Foreground)**：模擬真人操作，直接在當前頁面點擊封鎖。支援 **iOS / iPadOS** (需搭配 Stay 或 Userscripts 擴充)。
-    *   **背景模式 (Background)**：桌面端預設。將名單發送至背景視窗執行，不干擾主頁面瀏覽。
+*   **三模式運作**：
+    *   **Mobile 同分頁模式 (iOS/iPadOS)**：透過 `history.replaceState` + `reload` 在當前分頁執行封鎖，規避 Safari 的 Universal Links、彈出視窗阻擋等限制。完成後自動返回原頁面。
+    *   **前景模式 (Desktop)**：模擬真人操作，直接在當前頁面點擊封鎖。
+    *   **背景模式 (Desktop 預設)**：將名單發送至背景視窗執行，不干擾主頁面瀏覽。
 *   **批量封鎖**：
     *   點擊貼文旁的「更多」按鈕旁的圓形勾選框來選擇用戶。
     *   **Shift-Click 連鎖選取**：支援按住 `Shift` 鍵並點擊，一鍵選取/取消選取兩個勾選框之間的所有用戶，大幅提升操作效率。
@@ -37,7 +38,8 @@
 
 ## 📝 版本紀錄 (Changelog)
 
-### v2.0.7 (Enhancement: Own Account Exclusion & Dialog Block All)
+### v2.0.7 (Enhancement: iOS Same-Tab Worker & Dialog Block All)
+*   **[Feat] iOS/iPadOS 同分頁封鎖**：全新「Same-Tab Worker」機制，在 Safari 中以 `history.replaceState` + `reload` 方式執行背景封鎖，徹底避免 Universal Links 開啟原生 Threads App、彈出視窗被攔截、以及 iframe 無法注入 UserScript 等 iOS 限制。封鎖完成後自動返回原頁面。
 *   **[Feat] 同列全封 (按讚/轉發名單)**：針對「按讚」或「轉發」等互動名單視窗，新增一鍵「同列全封」按鈕，可一鍵將彈出視窗內所有符合條件的使用者加入背景封鎖排隊。
 *   **[Feat] 排除自我帳號**：新增 `Utils.getMyUsername()` 智能判斷邏輯，掃描時將自動略過使用者本人的貼文或回覆，不再顯示勾選框，有效防止誤鎖自己的帳號。
 *   **[優化] 渲染效能提升**：在建立 DOM 勾選框之前提前進行過濾（Early-return），減少無效渲染，進一步節省記憶體與效能。

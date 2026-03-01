@@ -42,7 +42,9 @@ import { Worker } from './worker.js';
                 const isMobile = Utils.isMobile();
                 const deskMode = Storage.get(CONFIG.KEYS.MAC_MODE) || 'background';
 
-                if (isMobile || deskMode === 'foreground') {
+                if (isMobile) {
+                    Core.runSameTabWorker();
+                } else if (deskMode === 'foreground') {
                     Core.runForegroundBlock();
                 } else {
                     // Add to queue

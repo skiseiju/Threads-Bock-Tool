@@ -170,6 +170,15 @@ export const UI = {
         document.body.appendChild(panel);
 
         // Bind Events
+        const bindClick = (id, handler) => {
+            if (!handler) return;
+            const el = document.getElementById(id);
+            if (!el) return;
+            // The UI panel uses standard click events securely because it floats at the body level
+            // away from any <a> tags. Using touchend + preventDefault here breaks iOS window.open permissions.
+            el.addEventListener('click', handler);
+        };
+
         document.getElementById('hege-toggle').onclick = () => {
             const min = !panel.classList.contains('minimized');
             panel.classList.toggle('minimized', min);
@@ -177,14 +186,14 @@ export const UI = {
             document.getElementById('hege-toggle').textContent = min ? '▼' : '▲';
         };
 
-        if (callbacks.onMainClick) document.getElementById('hege-main-btn-item').onclick = callbacks.onMainClick;
-        if (callbacks.onClearSel) document.getElementById('hege-clear-sel-item').onclick = callbacks.onClearSel;
-        if (callbacks.onClearDB) document.getElementById('hege-clear-db-item').onclick = callbacks.onClearDB;
-        if (callbacks.onImport) document.getElementById('hege-import-item').onclick = callbacks.onImport;
-        if (callbacks.onExport) document.getElementById('hege-export-item').onclick = callbacks.onExport;
-        if (callbacks.onRetryFailed) document.getElementById('hege-retry-failed-item').onclick = callbacks.onRetryFailed;
-        if (callbacks.onStop) document.getElementById('hege-stop-btn-item').onclick = callbacks.onStop;
-        if (callbacks.onModeToggle) document.getElementById('hege-mode-toggle-item').onclick = callbacks.onModeToggle;
+        bindClick('hege-main-btn-item', callbacks.onMainClick);
+        bindClick('hege-clear-sel-item', callbacks.onClearSel);
+        bindClick('hege-clear-db-item', callbacks.onClearDB);
+        bindClick('hege-import-item', callbacks.onImport);
+        bindClick('hege-export-item', callbacks.onExport);
+        bindClick('hege-retry-failed-item', callbacks.onRetryFailed);
+        bindClick('hege-stop-btn-item', callbacks.onStop);
+        bindClick('hege-mode-toggle-item', callbacks.onModeToggle);
 
         // Header click toggles too
         document.getElementById('hege-header').onclick = (e) => {

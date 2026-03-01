@@ -12,8 +12,7 @@ mkdir -p "$DIST_DIR"
 # Build Temp Bundle (Logic Only)
 TEMP_BUNDLE="$DIST_DIR/temp_bundle.js"
 
-# Auto-increment Version Logic
-OLD_VERSION="$(grep -oE "VERSION: '[^']+'" "$SRC_DIR/config.js" | cut -d "'" -f 2 | tr -d '\r')"
+OLD_VERSION="$(grep -oE "VERSION:\s*'[^']+'" "$SRC_DIR/config.js" | cut -d "'" -f 2 | tr -d '\r')"
 
 if [[ "$1" == "--release" ]]; then
     # Drop beta tag if it exists (e.g., 2.0.6-beta1 -> 2.0.6)
@@ -30,7 +29,7 @@ else
     # Bump or add beta tag
     if [[ "$OLD_VERSION" == *"-beta"* ]]; then
         BASE=$(echo "$OLD_VERSION" | sed -E 's/-beta.*//')
-        BETA_NUM=$(echo "$OLD_VERSION" | grep -oE '-beta[0-9]+' | grep -oE '[0-9]+')
+        BETA_NUM=$(echo "$OLD_VERSION" | grep -oE '-beta[0-9]+' | grep -oE '[0-9]+' | tr -d '\n\r ')
         APP_VERSION="$BASE-beta$((BETA_NUM + 1))"
     else
         # E.g. 2.0.6 -> 2.0.7-beta1

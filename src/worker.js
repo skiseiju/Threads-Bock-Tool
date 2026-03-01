@@ -37,12 +37,12 @@ export const Worker = {
 
     createStatusUI: () => {
         const cover = document.createElement('div');
-        cover.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:#000;color:#0f0;z-index:999999;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;font-family:monospace;font-size:14px;padding:20px;box-sizing:border-box;overflow:hidden;";
+        cover.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:#111;color:#4cd964;z-index:999999;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;font-family:system-ui, -apple-system, sans-serif;font-size:14px;padding:20px;box-sizing:border-box;overflow:hidden;';
 
         Utils.setHTML(cover, `
             <div id="bg-status" style="font-size:18px;font-weight:bold;margin-bottom:10px;">等待指令...</div>
-            <div style="font-size:12px;color:#666;margin-bottom:20px;">請勿關閉此分頁</div>
-            <div id="hege-worker-log" style="width:100%;flex:1;overflow-y:auto;border:1px solid #333;padding:10px;text-align:left;font-family:monospace;font-size:12px;color:#aaa;background:#111;"></div>
+            <div style="font-size:12px;color:#666;margin-bottom:20px;">請勿離開此頁面，封鎖完成後會自動返回</div>
+            <div id="hege-worker-log" style="width:100%;flex:1;overflow-y:auto;border:1px solid #333;padding:10px;text-align:left;font-family:monospace;font-size:12px;color:#aaa;background:#000;"></div>
         `);
         document.body.appendChild(cover);
     },
@@ -52,20 +52,37 @@ export const Worker = {
         Storage.setJSON(CONFIG.KEYS.BG_STATUS, s);
         const el = document.getElementById('bg-status');
         if (el) el.textContent = `[${state.toUpperCase()}] ${current} (${progress}/${total})`;
-        document.title = state === 'running' ? `🛡️ ${progress}/${total}` : "🛡️ 留友封";
+        document.title = state === 'running' ? `🛡️ ${progress}/${total}` : '🛡️ 留友封';
+    },
+
+    navigateBack: () => {
+        setTimeout(() => {
+            const returnUrl = Storage.get('hege_return_url');
+            if (returnUrl) {
+                Storage.remove('hege_return_url');
+                // Use history.replaceState + reload to avoid Universal Links on iOS
+                const url = new URL(returnUrl);
+                history.replaceState(null, '', url.pathname + url.search);
+                location.reload();
+            } else {
+                // Desktop popup fallback
+                window.close();
+            }
+        }, 2000);
     },
 
     runStep: async () => {
         if (Storage.get(CONFIG.KEYS.BG_CMD) === 'stop') {
             Storage.remove(CONFIG.KEYS.BG_CMD);
             Worker.updateStatus('stopped', '已停止');
+            Worker.navigateBack();
             return;
         }
 
         let queue = Storage.getJSON(CONFIG.KEYS.BG_QUEUE, []);
         if (queue.length === 0) {
             Worker.updateStatus('idle', '完成', 0, 0);
-            setTimeout(() => window.close(), 1000);
+            Worker.navigateBack();
             return;
         }
 
@@ -85,7 +102,9 @@ export const Worker = {
         if (!onTargetPage) {
             Worker.updateStatus('running', `前往: ${targetUser}`, 0, currentTotal);
             await Utils.sleep(500 + Math.random() * 500);
-            window.location.href = `https://www.threads.net/@${targetUser}?hege_bg=true`;
+            // Use history.replaceState + reload to avoid Universal Links on iOS
+            history.replaceState(null, '', `/@${targetUser}?hege_bg=true`);
+            location.reload();
         } else {
             Worker.updateStatus('running', `封鎖中: ${targetUser}`, 0, currentTotal);
             const result = await Worker.autoBlock(targetUser);

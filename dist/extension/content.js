@@ -3,7 +3,7 @@
     console.log('[HegeBlock] Content Script Injected, Version: 2.0.7');
 // --- config.js ---
 const CONFIG = {
-    VERSION: '2.0.7', // Performance Optimization Version
+    VERSION: '2.0.7', // Fix Worker internal nav Universal Links
     DEBUG_MODE: true,
     DB_KEY: 'hege_block_db_v1',
     KEYS: {
@@ -378,6 +378,15 @@ const UI = {
         document.body.appendChild(panel);
 
         // Bind Events
+        const bindClick = (id, handler) => {
+            if (!handler) return;
+            const el = document.getElementById(id);
+            if (!el) return;
+            // The UI panel uses standard click events securely because it floats at the body level
+            // away from any <a> tags. Using touchend + preventDefault here breaks iOS window.open permissions.
+            el.addEventListener('click', handler);
+        };
+
         document.getElementById('hege-toggle').onclick = () => {
             const min = !panel.classList.contains('minimized');
             panel.classList.toggle('minimized', min);
@@ -385,14 +394,14 @@ const UI = {
             document.getElementById('hege-toggle').textContent = min ? '▼' : '▲';
         };
 
-        if (callbacks.onMainClick) document.getElementById('hege-main-btn-item').onclick = callbacks.onMainClick;
-        if (callbacks.onClearSel) document.getElementById('hege-clear-sel-item').onclick = callbacks.onClearSel;
-        if (callbacks.onClearDB) document.getElementById('hege-clear-db-item').onclick = callbacks.onClearDB;
-        if (callbacks.onImport) document.getElementById('hege-import-item').onclick = callbacks.onImport;
-        if (callbacks.onExport) document.getElementById('hege-export-item').onclick = callbacks.onExport;
-        if (callbacks.onRetryFailed) document.getElementById('hege-retry-failed-item').onclick = callbacks.onRetryFailed;
-        if (callbacks.onStop) document.getElementById('hege-stop-btn-item').onclick = callbacks.onStop;
-        if (callbacks.onModeToggle) document.getElementById('hege-mode-toggle-item').onclick = callbacks.onModeToggle;
+        bindClick('hege-main-btn-item', callbacks.onMainClick);
+        bindClick('hege-clear-sel-item', callbacks.onClearSel);
+        bindClick('hege-clear-db-item', callbacks.onClearDB);
+        bindClick('hege-import-item', callbacks.onImport);
+        bindClick('hege-export-item', callbacks.onExport);
+        bindClick('hege-retry-failed-item', callbacks.onRetryFailed);
+        bindClick('hege-stop-btn-item', callbacks.onStop);
+        bindClick('hege-mode-toggle-item', callbacks.onModeToggle);
 
         // Header click toggles too
         document.getElementById('hege-header').onclick = (e) => {
@@ -615,13 +624,28 @@ const Core = {
 
         for (let h of headers) {
             const text = h.innerText.trim();
-            // Restrict to Likes/Reposts dialogs. Activity pane is too broad.
-            if (text.includes('讚') || text.includes('Likes')) {
+
+            // We want to lock onto these specific dialog keywords:
+            // "貼文動態" (Post Activity), "讚" (Likes), "Likes"
+            if (text.includes('貼文動態') || text.includes('讚') || text.includes('Likes')) {
                 // Ignore the main page "Threads" header if somehow it matched
                 if (text === 'Threads') continue;
-                header = h;
-                titleText = text;
-                break; // Found the most likely modal header
+
+                // Extra safety: make sure it's inside a dialog or at least not the main nav
+                let isDialog = false;
+                let p = h.parentElement;
+                for (let i = 0; i < 6; i++) {
+                    if (p && p.getAttribute('role') === 'dialog') { isDialog = true; break; }
+                    if (p) p = p.parentElement;
+                }
+
+                // With specific keywords, we can be more confident, but let's enforce dialog
+                // or just allow it if the text is exactly '貼文動態' since it's highly specific.
+                if (isDialog || text === '貼文動態') {
+                    header = h;
+                    titleText = text;
+                    break;
+                }
             }
         }
 
@@ -644,7 +668,7 @@ const Core = {
             <span>同列全封</span>
         `;
 
-        blockAllBtn.onclick = (e) => {
+        const handleBlockAll = (e) => {
             e.stopPropagation();
             e.preventDefault();
 
@@ -681,27 +705,16 @@ const Core = {
             const status = Storage.getJSON(CONFIG.KEYS.BG_STATUS, {});
             const isRunning = (Date.now() - (status.lastUpdate || 0) < 10000 && status.state === 'running');
 
-            if (confirm(`找到 ${newUsers.length} 筆新名單。\n是否加入封鎖名單？\n(按「取消」不加入，按「確定」加入)`)) {
-                // Confirmed: Add to pending
-                newUsers.forEach(u => Core.pendingUsers.add(u));
-                Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
+            // Directly add to pending without confirm dialog
+            newUsers.forEach(u => Core.pendingUsers.add(u));
+            Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
 
-                if (isRunning) {
-                    const combinedQueue = [...activeQueue, ...Core.pendingUsers];
-                    Storage.setJSON(CONFIG.KEYS.BG_QUEUE, [...new Set(combinedQueue)]);
-                    UI.showToast(`已將畫面上 ${newUsers.length} 筆帳號加入背景排隊`);
-                } else {
-                    if (confirm(`已加入 ${newUsers.length} 筆名單。\n是否立刻啟動背景封鎖？`)) {
-                        const combinedQueue = [...activeQueue, ...Core.pendingUsers];
-                        Storage.setJSON(CONFIG.KEYS.BG_QUEUE, [...new Set(combinedQueue)]);
-                        window.open('https://www.threads.net/?hege_bg=true', 'HegeBlockWorker', 'width=800,height=600');
-                    } else {
-                        UI.showToast(`已加入「${Core.pendingUsers.size} 選取」，請至清單手動啟動`);
-                    }
-                }
+            if (isRunning) {
+                const combinedQueue = [...activeQueue, ...Core.pendingUsers];
+                Storage.setJSON(CONFIG.KEYS.BG_QUEUE, [...new Set(combinedQueue)]);
+                UI.showToast(`已將畫面上 ${newUsers.length} 筆帳號加入背景排隊`);
             } else {
-                // Cancelled: Abort
-                UI.showToast('已取消加入名單', 1500);
+                UI.showToast(`已加入「${Core.pendingUsers.size} 選取」，請至清單「開始封鎖」`);
             }
 
             // Sync checkbox visually on current page
@@ -714,6 +727,21 @@ const Core = {
             // CRITICAL: Update floating panel count!
             Core.updateControllerUI();
         };
+
+        if (Utils.isMobile()) {
+            blockAllBtn.addEventListener('touchstart', (e) => {
+                e.stopPropagation();
+            }, { passive: false });
+
+            blockAllBtn.addEventListener('touchend', (e) => {
+                // preventDefault stops iOS Safari from firing the synthetic click which triggers Universal Links
+                e.stopPropagation();
+                e.preventDefault();
+                handleBlockAll(e);
+            }, { passive: false });
+        } else {
+            blockAllBtn.addEventListener('click', handleBlockAll);
+        }
 
         headerContainer.style.display = 'flex';
         headerContainer.style.alignItems = 'center';
@@ -815,11 +843,30 @@ const Core = {
                 }
             }
 
-            container.ontouchend = (e) => {
-                if (e.target.closest('.hege-checkbox-container')) {
-                    e.stopPropagation();
-                }
-            };
+            if (Utils.isMobile()) {
+                container.addEventListener('touchstart', (e) => {
+                    if (e.target.closest('.hege-checkbox-container')) {
+                        e.stopPropagation();
+                    }
+                }, { passive: false });
+
+                container.addEventListener('touchend', (e) => {
+                    if (e.target.closest('.hege-checkbox-container')) {
+                        e.stopPropagation();
+                        e.preventDefault(); // CRITICAL: Stop iOS from firing synthetic click that triggers Universal Link
+
+                        // Manually trigger handleGlobalClick since we prevented the default synthetic click
+                        Core.handleGlobalClick(e);
+                    }
+                }, { passive: false });
+            } else {
+                container.ontouchend = (e) => {
+                    if (e.target.closest('.hege-checkbox-container')) {
+                        e.stopPropagation();
+                    }
+                };
+            }
+
             container.onmousedown = (e) => {
                 if (e.shiftKey) e.preventDefault();
             };
@@ -1012,6 +1059,40 @@ const Core = {
         const mainItem = document.getElementById('hege-main-btn-item');
         if (mainItem) { mainItem.querySelector('span').textContent = mainText; mainItem.style.color = shouldShowStop ? headerColor : '#f5f5f5'; }
         const header = document.getElementById('hege-header'); if (header) header.style.borderColor = headerColor;
+    },
+
+    runSameTabWorker: () => {
+        const toAdd = Array.from(Core.pendingUsers);
+
+        const q = Storage.getJSON(CONFIG.KEYS.BG_QUEUE, []);
+        const newQ = [...new Set([...q, ...toAdd])];
+
+        if (newQ.length === 0) {
+            UI.showToast('沒有待處理的帳號');
+            return;
+        }
+
+        Storage.setJSON(CONFIG.KEYS.BG_QUEUE, newQ);
+        Storage.remove(CONFIG.KEYS.BG_CMD);
+
+        if (toAdd.length > 0) {
+            Core.pendingUsers.clear();
+            Storage.setSessionJSON(CONFIG.KEYS.PENDING, []);
+        }
+
+        // Save current page URL (without hege_bg param) so the worker can navigate back when done
+        const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete('hege_bg');
+        Storage.set('hege_return_url', cleanUrl.toString());
+
+        // CRITICAL: Use history.replaceState + reload to avoid Universal Links entirely.
+        // Since we're already on threads.net, we modify the URL in-place (no navigation event)
+        // and reload. Safari sees this as a page refresh, NOT a navigation to a new URL,
+        // so Universal Links cannot intercept it.
+        const workerUrl = new URL(window.location.origin);
+        workerUrl.searchParams.set('hege_bg', 'true');
+        history.replaceState(null, '', workerUrl.toString());
+        location.reload();
     },
 
     runForegroundBlock: async () => {
@@ -1220,7 +1301,11 @@ const Core = {
             const status = Storage.getJSON(CONFIG.KEYS.BG_STATUS, {});
             const isRunning = (Date.now() - (status.lastUpdate || 0) < 10000 && status.state === 'running');
             if (!isRunning) {
-                window.open('https://www.threads.net/?hege_bg=true', 'HegeBlockWorker', 'width=800,height=600');
+                if (Utils.isMobile()) {
+                    Core.runSameTabWorker();
+                } else {
+                    window.open('https://www.threads.net/?hege_bg=true', 'HegeBlockWorker', 'width=800,height=600');
+                }
             }
         }
     },
@@ -1255,7 +1340,11 @@ const Core = {
         const isRunning = (Date.now() - (status.lastUpdate || 0) < 10000 && status.state === 'running');
 
         if (!isRunning && confirm(`已匯入 ${newUsers.length} 筆名單。\n是否立即開始背景執行？`)) {
-            window.open('https://www.threads.net/?hege_bg=true', 'HegeBlockWorker', 'width=800,height=600');
+            if (Utils.isMobile()) {
+                Core.runSameTabWorker();
+            } else {
+                window.open('https://www.threads.net/?hege_bg=true', 'HegeBlockWorker', 'width=800,height=600');
+            }
         } else if (isRunning) {
             UI.showToast('已合併至正在運行的背景任務');
         }
@@ -1302,12 +1391,12 @@ const Worker = {
 
     createStatusUI: () => {
         const cover = document.createElement('div');
-        cover.style.cssText = "position:fixed;top:0;left:0;width:100%;height:100%;background:#000;color:#0f0;z-index:999999;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;font-family:monospace;font-size:14px;padding:20px;box-sizing:border-box;overflow:hidden;";
+        cover.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:#111;color:#4cd964;z-index:999999;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;font-family:system-ui, -apple-system, sans-serif;font-size:14px;padding:20px;box-sizing:border-box;overflow:hidden;';
 
         Utils.setHTML(cover, `
             <div id="bg-status" style="font-size:18px;font-weight:bold;margin-bottom:10px;">等待指令...</div>
-            <div style="font-size:12px;color:#666;margin-bottom:20px;">請勿關閉此分頁</div>
-            <div id="hege-worker-log" style="width:100%;flex:1;overflow-y:auto;border:1px solid #333;padding:10px;text-align:left;font-family:monospace;font-size:12px;color:#aaa;background:#111;"></div>
+            <div style="font-size:12px;color:#666;margin-bottom:20px;">請勿離開此頁面，封鎖完成後會自動返回</div>
+            <div id="hege-worker-log" style="width:100%;flex:1;overflow-y:auto;border:1px solid #333;padding:10px;text-align:left;font-family:monospace;font-size:12px;color:#aaa;background:#000;"></div>
         `);
         document.body.appendChild(cover);
     },
@@ -1317,20 +1406,37 @@ const Worker = {
         Storage.setJSON(CONFIG.KEYS.BG_STATUS, s);
         const el = document.getElementById('bg-status');
         if (el) el.textContent = `[${state.toUpperCase()}] ${current} (${progress}/${total})`;
-        document.title = state === 'running' ? `🛡️ ${progress}/${total}` : "🛡️ 留友封";
+        document.title = state === 'running' ? `🛡️ ${progress}/${total}` : '🛡️ 留友封';
+    },
+
+    navigateBack: () => {
+        setTimeout(() => {
+            const returnUrl = Storage.get('hege_return_url');
+            if (returnUrl) {
+                Storage.remove('hege_return_url');
+                // Use history.replaceState + reload to avoid Universal Links on iOS
+                const url = new URL(returnUrl);
+                history.replaceState(null, '', url.pathname + url.search);
+                location.reload();
+            } else {
+                // Desktop popup fallback
+                window.close();
+            }
+        }, 2000);
     },
 
     runStep: async () => {
         if (Storage.get(CONFIG.KEYS.BG_CMD) === 'stop') {
             Storage.remove(CONFIG.KEYS.BG_CMD);
             Worker.updateStatus('stopped', '已停止');
+            Worker.navigateBack();
             return;
         }
 
         let queue = Storage.getJSON(CONFIG.KEYS.BG_QUEUE, []);
         if (queue.length === 0) {
             Worker.updateStatus('idle', '完成', 0, 0);
-            setTimeout(() => window.close(), 1000);
+            Worker.navigateBack();
             return;
         }
 
@@ -1350,7 +1456,9 @@ const Worker = {
         if (!onTargetPage) {
             Worker.updateStatus('running', `前往: ${targetUser}`, 0, currentTotal);
             await Utils.sleep(500 + Math.random() * 500);
-            window.location.href = `https://www.threads.net/@${targetUser}?hege_bg=true`;
+            // Use history.replaceState + reload to avoid Universal Links on iOS
+            history.replaceState(null, '', `/@${targetUser}?hege_bg=true`);
+            location.reload();
         } else {
             Worker.updateStatus('running', `封鎖中: ${targetUser}`, 0, currentTotal);
             const result = await Worker.autoBlock(targetUser);
@@ -1592,7 +1700,9 @@ const Worker = {
                 const isMobile = Utils.isMobile();
                 const deskMode = Storage.get(CONFIG.KEYS.MAC_MODE) || 'background';
 
-                if (isMobile || deskMode === 'foreground') {
+                if (isMobile) {
+                    Core.runSameTabWorker();
+                } else if (deskMode === 'foreground') {
                     Core.runForegroundBlock();
                 } else {
                     // Add to queue

@@ -1,5 +1,5 @@
 export const CONFIG = {
-    VERSION: '2.0.7', // Performance Optimization Version
+    VERSION: '2.0.7', // Fix Worker internal nav Universal Links
     DEBUG_MODE: true,
     DB_KEY: 'hege_block_db_v1',
     KEYS: {

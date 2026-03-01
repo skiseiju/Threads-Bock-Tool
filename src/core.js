@@ -73,13 +73,28 @@ export const Core = {
 
         for (let h of headers) {
             const text = h.innerText.trim();
-            // Restrict to Likes/Reposts dialogs. Activity pane is too broad.
-            if (text.includes('讚') || text.includes('Likes')) {
+
+            // We want to lock onto these specific dialog keywords:
+            // "貼文動態" (Post Activity), "讚" (Likes), "Likes"
+            if (text.includes('貼文動態') || text.includes('讚') || text.includes('Likes')) {
                 // Ignore the main page "Threads" header if somehow it matched
                 if (text === 'Threads') continue;
-                header = h;
-                titleText = text;
-                break; // Found the most likely modal header
+
+                // Extra safety: make sure it's inside a dialog or at least not the main nav
+                let isDialog = false;
+                let p = h.parentElement;
+                for (let i = 0; i < 6; i++) {
+                    if (p && p.getAttribute('role') === 'dialog') { isDialog = true; break; }
+                    if (p) p = p.parentElement;
+                }
+
+                // With specific keywords, we can be more confident, but let's enforce dialog
+                // or just allow it if the text is exactly '貼文動態' since it's highly specific.
+                if (isDialog || text === '貼文動態') {
+                    header = h;
+                    titleText = text;
+                    break;
+                }
             }
         }
 
@@ -102,7 +117,7 @@ export const Core = {
             <span>同列全封</span>
         `;
 
-        blockAllBtn.onclick = (e) => {
+        const handleBlockAll = (e) => {
             e.stopPropagation();
             e.preventDefault();
 
@@ -139,27 +154,16 @@ export const Core = {
             const status = Storage.getJSON(CONFIG.KEYS.BG_STATUS, {});
             const isRunning = (Date.now() - (status.lastUpdate || 0) < 10000 && status.state === 'running');
 
-            if (confirm(`找到 ${newUsers.length} 筆新名單。\n是否加入封鎖名單？\n(按「取消」不加入，按「確定」加入)`)) {
-                // Confirmed: Add to pending
-                newUsers.forEach(u => Core.pendingUsers.add(u));
-                Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
+            // Directly add to pending without confirm dialog
+            newUsers.forEach(u => Core.pendingUsers.add(u));
+            Storage.setSessionJSON(CONFIG.KEYS.PENDING, [...Core.pendingUsers]);
 
-                if (isRunning) {
-                    const combinedQueue = [...activeQueue, ...Core.pendingUsers];
-                    Storage.setJSON(CONFIG.KEYS.BG_QUEUE, [...new Set(combinedQueue)]);
-                    UI.showToast(`已將畫面上 ${newUsers.length} 筆帳號加入背景排隊`);
-                } else {
-                    if (confirm(`已加入 ${newUsers.length} 筆名單。\n是否立刻啟動背景封鎖？`)) {
-                        const combinedQueue = [...activeQueue, ...Core.pendingUsers];
-                        Storage.setJSON(CONFIG.KEYS.BG_QUEUE, [...new Set(combinedQueue)]);
-                        window.open('https://www.threads.net/?hege_bg=true', 'HegeBlockWorker', 'width=800,height=600');
-                    } else {
-                        UI.showToast(`已加入「${Core.pendingUsers.size} 選取」，請至清單手動啟動`);
-                    }
-                }
+            if (isRunning) {
+                const combinedQueue = [...activeQueue, ...Core.pendingUsers];
+                Storage.setJSON(CONFIG.KEYS.BG_QUEUE, [...new Set(combinedQueue)]);
+                UI.showToast(`已將畫面上 ${newUsers.length} 筆帳號加入背景排隊`);
             } else {
-                // Cancelled: Abort
-                UI.showToast('已取消加入名單', 1500);
+                UI.showToast(`已加入「${Core.pendingUsers.size} 選取」，請至清單「開始封鎖」`);
             }
 
             // Sync checkbox visually on current page
@@ -172,6 +176,21 @@ export const Core = {
             // CRITICAL: Update floating panel count!
             Core.updateControllerUI();
         };
+
+        if (Utils.isMobile()) {
+            blockAllBtn.addEventListener('touchstart', (e) => {
+                e.stopPropagation();
+            }, { passive: false });
+
+            blockAllBtn.addEventListener('touchend', (e) => {
+                // preventDefault stops iOS Safari from firing the synthetic click which triggers Universal Links
+                e.stopPropagation();
+                e.preventDefault();
+                handleBlockAll(e);
+            }, { passive: false });
+        } else {
+            blockAllBtn.addEventListener('click', handleBlockAll);
+        }
 
         headerContainer.style.display = 'flex';
         headerContainer.style.alignItems = 'center';
@@ -273,11 +292,30 @@ export const Core = {
                 }
             }
 
-            container.ontouchend = (e) => {
-                if (e.target.closest('.hege-checkbox-container')) {
-                    e.stopPropagation();
-                }
-            };
+            if (Utils.isMobile()) {
+                container.addEventListener('touchstart', (e) => {
+                    if (e.target.closest('.hege-checkbox-container')) {
+                        e.stopPropagation();
+                    }
+                }, { passive: false });
+
+                container.addEventListener('touchend', (e) => {
+                    if (e.target.closest('.hege-checkbox-container')) {
+                        e.stopPropagation();
+                        e.preventDefault(); // CRITICAL: Stop iOS from firing synthetic click that triggers Universal Link
+
+                        // Manually trigger handleGlobalClick since we prevented the default synthetic click
+                        Core.handleGlobalClick(e);
+                    }
+                }, { passive: false });
+            } else {
+                container.ontouchend = (e) => {
+                    if (e.target.closest('.hege-checkbox-container')) {
+                        e.stopPropagation();
+                    }
+                };
+            }
+
             container.onmousedown = (e) => {
                 if (e.shiftKey) e.preventDefault();
             };
@@ -470,6 +508,40 @@ export const Core = {
         const mainItem = document.getElementById('hege-main-btn-item');
         if (mainItem) { mainItem.querySelector('span').textContent = mainText; mainItem.style.color = shouldShowStop ? headerColor : '#f5f5f5'; }
         const header = document.getElementById('hege-header'); if (header) header.style.borderColor = headerColor;
+    },
+
+    runSameTabWorker: () => {
+        const toAdd = Array.from(Core.pendingUsers);
+
+        const q = Storage.getJSON(CONFIG.KEYS.BG_QUEUE, []);
+        const newQ = [...new Set([...q, ...toAdd])];
+
+        if (newQ.length === 0) {
+            UI.showToast('沒有待處理的帳號');
+            return;
+        }
+
+        Storage.setJSON(CONFIG.KEYS.BG_QUEUE, newQ);
+        Storage.remove(CONFIG.KEYS.BG_CMD);
+
+        if (toAdd.length > 0) {
+            Core.pendingUsers.clear();
+            Storage.setSessionJSON(CONFIG.KEYS.PENDING, []);
+        }
+
+        // Save current page URL (without hege_bg param) so the worker can navigate back when done
+        const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete('hege_bg');
+        Storage.set('hege_return_url', cleanUrl.toString());
+
+        // CRITICAL: Use history.replaceState + reload to avoid Universal Links entirely.
+        // Since we're already on threads.net, we modify the URL in-place (no navigation event)
+        // and reload. Safari sees this as a page refresh, NOT a navigation to a new URL,
+        // so Universal Links cannot intercept it.
+        const workerUrl = new URL(window.location.origin);
+        workerUrl.searchParams.set('hege_bg', 'true');
+        history.replaceState(null, '', workerUrl.toString());
+        location.reload();
     },
 
     runForegroundBlock: async () => {
@@ -678,7 +750,11 @@ export const Core = {
             const status = Storage.getJSON(CONFIG.KEYS.BG_STATUS, {});
             const isRunning = (Date.now() - (status.lastUpdate || 0) < 10000 && status.state === 'running');
             if (!isRunning) {
-                window.open('https://www.threads.net/?hege_bg=true', 'HegeBlockWorker', 'width=800,height=600');
+                if (Utils.isMobile()) {
+                    Core.runSameTabWorker();
+                } else {
+                    window.open('https://www.threads.net/?hege_bg=true', 'HegeBlockWorker', 'width=800,height=600');
+                }
             }
         }
     },
@@ -713,7 +789,11 @@ export const Core = {
         const isRunning = (Date.now() - (status.lastUpdate || 0) < 10000 && status.state === 'running');
 
         if (!isRunning && confirm(`已匯入 ${newUsers.length} 筆名單。\n是否立即開始背景執行？`)) {
-            window.open('https://www.threads.net/?hege_bg=true', 'HegeBlockWorker', 'width=800,height=600');
+            if (Utils.isMobile()) {
+                Core.runSameTabWorker();
+            } else {
+                window.open('https://www.threads.net/?hege_bg=true', 'HegeBlockWorker', 'width=800,height=600');
+            }
         } else if (isRunning) {
             UI.showToast('已合併至正在運行的背景任務');
         }
